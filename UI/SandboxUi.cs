@@ -5,7 +5,7 @@ using UnityEngine.Events;
 using UnityEngine.UI;
 using Object = UnityEngine.Object;
 
-namespace S3_NullServers.UI
+namespace NullServers.UI
 {
     internal sealed class SandboxUi
     {
@@ -35,6 +35,7 @@ namespace S3_NullServers.UI
             RectTransform rect = Add<RectTransform>(target);
             rect.SetParent(parent, false);
             Area(rect, 0f, 0f, 1f, 1f);
+
             return rect;
         }
 
@@ -70,6 +71,7 @@ namespace S3_NullServers.UI
             Image image = Add<Image>(rect.gameObject);
             image.color = color;
             image.raycastTarget = raycast;
+
             return image;
         }
 
@@ -85,6 +87,7 @@ namespace S3_NullServers.UI
             text.raycastTarget = false;
             text.horizontalOverflow = HorizontalWrapMode.Wrap;
             text.verticalOverflow = VerticalWrapMode.Truncate;
+
             return text;
         }
 
@@ -114,6 +117,7 @@ namespace S3_NullServers.UI
             label.resizeTextMinSize = Mathf.RoundToInt(14f * Unit);
             label.resizeTextMaxSize = Mathf.RoundToInt(23f * Unit);
             button.onClick.AddListener(DelegateSupport.ConvertDelegate<UnityAction>(clicked));
+
             return button;
         }
 
@@ -138,6 +142,7 @@ namespace S3_NullServers.UI
             input.lineType = InputField.LineType.SingleLine;
             input.text = value ?? "";
             input.onValueChanged.AddListener(DelegateSupport.ConvertDelegate<UnityAction<string>>(changed));
+
             return input;
         }
 
@@ -149,10 +154,12 @@ namespace S3_NullServers.UI
             scroll.vertical = true;
             scroll.movementType = ScrollRect.MovementType.Clamped;
             scroll.scrollSensitivity = 42f * Unit;
+
             RectTransform viewport = Rect("Viewport", rect);
             viewport.offsetMax = new Vector2(-18 * Unit, 0f);
             Image(viewport, new Color(1f, 1f, 1f, 0.005f));
             Add<RectMask2D>(viewport.gameObject);
+
             RectTransform content = Rect("Content", viewport);
             content.anchorMin = new Vector2(0f, 1f);
             content.anchorMax = Vector2.one;
@@ -160,19 +167,23 @@ namespace S3_NullServers.UI
             content.sizeDelta = Vector2.zero;
             scroll.viewport = viewport;
             scroll.content = content;
+
             RectTransform track = Rect("Scrollbar", rect);
             Area(track, 1f, 0f, 1f, 1f);
             track.offsetMin = new Vector2(-12 * Unit, 0f);
             track.offsetMax = Vector2.zero;
             Image(track, new Color(0.79f, 0.81f, 0.84f));
+
             RectTransform handle = Rect("Handle", track);
             Image handleImage = Image(handle, new Color(0.43f, 0.47f, 0.52f));
+
             Scrollbar bar = Add<Scrollbar>(track.gameObject);
             bar.targetGraphic = handleImage;
             bar.handleRect = handle;
             bar.direction = Scrollbar.Direction.BottomToTop;
             scroll.verticalScrollbar = bar;
             scroll.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.AutoHide;
+
             return scroll;
         }
 
@@ -182,9 +193,11 @@ namespace S3_NullServers.UI
         {
             RectTransform rect = Rect("Slider", parent);
             Image(rect, new Color(0.75f, 0.78f, 0.81f));
+
             RectTransform handle = Rect("Handle", rect);
             Image(handle, Blue);
             handle.sizeDelta = new Vector2(16f * Unit, 0f);
+
             Slider slider = Add<Slider>(rect.gameObject);
             slider.handleRect = handle;
             slider.targetGraphic = handle.GetComponent(Il2CppType.Of<Image>()).Cast<Image>();
@@ -192,6 +205,7 @@ namespace S3_NullServers.UI
             slider.maxValue = 1f;
             slider.value = value;
             slider.onValueChanged.AddListener(DelegateSupport.ConvertDelegate<UnityAction<float>>(changed));
+
             return slider;
         }
     }

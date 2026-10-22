@@ -3,13 +3,13 @@ using Il2Cpp;
 using Il2CppFishNet.Transporting;
 using Il2CppFishNet.Transporting.Relay;
 using MelonLoader;
-using S3_NullServers.Network;
+using NullServers.Network;
 using System.Collections;
 using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.UI;
 
-namespace S3_NullServers.UI
+namespace NullServers.UI
 {
     internal sealed class ServerMenu
     {
@@ -35,10 +35,7 @@ namespace S3_NullServers.UI
         {
             _menu = menu;
 
-            if (!menu.OJKJNHPHFFO.activeInHierarchy)
-            {
-                return;
-            }
+            if (!menu.OJKJNHPHFFO.activeInHierarchy) return;
 
             UpdaterV2 updater = menu.LNJBJHMGKNJ;
             CheckForUpdatesManager manager = menu.IKJFGOGMBHM.GetComponent<CheckForUpdatesManager>();
@@ -46,7 +43,7 @@ namespace S3_NullServers.UI
 
             if (updater.OJKJNHPHFFO == null || updater.OJKJNHPHFFO.Count == 0 || labels.Length < 2)
             {
-                _logger.Error("The server list or the built-in server buttons are unavailable.");
+                _logger?.Error("The server list or the built-in server buttons are unavailable.");
                 return;
             }
 
@@ -56,7 +53,6 @@ namespace S3_NullServers.UI
             foreach (string name in new[] { "OFFICIAL SERVERS", "NULLFRAME SERVERS" })
             {
                 servers.Add(new UpdaterV2.serverInfo
-
                 {
                     serverName = name,
                     serverType = source.serverType,
@@ -86,19 +82,16 @@ namespace S3_NullServers.UI
             _nullFrameButton.onClick = new Button.ButtonClickedEvent();
             _nullFrameButton.onClick.AddListener((UnityAction)(() => SelectServers(true)));
 
-            _logger.Msg("Official and NullFrame servers configured through UpdaterV2 using the built-in menu buttons.");
+            _logger?.Msg("Official and NullFrame servers configured through UpdaterV2 using the built-in menu buttons.");
         }
 
         private void SelectServers(bool useNullFrame)
         {
-            if (_session.IsSwitching)
-            {
-                return;
-            }
+            if (_session.IsSwitching) return;
 
             if (_session.Relay && _session.Relay.CurrentRoom != null)
             {
-                _logger.Warning("Leave the current room before switching server groups.");
+                _logger?.Warning("Leave the current room before switching server groups.");
                 return;
             }
 
@@ -119,19 +112,19 @@ namespace S3_NullServers.UI
 
                     float timeout = Time.realtimeSinceStartup + 10f;
 
-                    while (_session.Relay &&
+                    while 
+                    (
+                        _session.Relay &&
                         (_session.Relay.RelayState != RelayConnectionState.Disconnected ||
                         (_session.Relay.ClientTransport &&
-                        _session.Relay.ClientTransport.GetConnectionState(false) != LocalConnectionState.Stopped)))
+                        _session.Relay.ClientTransport.GetConnectionState(false) != LocalConnectionState.Stopped))
+                    )
                     {
-                        if (!_menu || !_menu.OJKJNHPHFFO.activeInHierarchy)
-                        {
-                            yield break;
-                        }
+                        if (!_menu || !_menu.OJKJNHPHFFO.activeInHierarchy) yield break;
 
                         if (Time.realtimeSinceStartup >= timeout)
                         {
-                            _logger.Warning("Timed out waiting for the previous relay connection to stop.");
+                            _logger?.Warning("Timed out waiting for the previous relay connection to stop.");
                             yield break;
                         }
 
@@ -151,7 +144,7 @@ namespace S3_NullServers.UI
 
                 _session.IsSwitching = false;
 
-                _logger.Msg($"Selected {(_session.IsNullFrame ? "NullFrame" : "official")} servers. GameVersion: {_session.SelectedVersion ?? Application.version}.");
+                _logger?.Msg($"Selected {(_session.IsNullFrame ? "NullFrame" : "official")} servers. GameVersion: {_session.SelectedVersion ?? Application.version}.");
                 _menu.SelectedServer(_session.IsNullFrame ? 1 : 0);
             }
             finally
@@ -172,17 +165,10 @@ namespace S3_NullServers.UI
 
         private void ClearLobbyRoomLists()
         {
-            if (!_menu || !_menu.LFGIAIMOBLB)
-            {
-                return;
-            }
+            if (!_menu || !_menu.LFGIAIMOBLB) return;
 
             LobbyMenu lobby = _menu.LFGIAIMOBLB.GetComponent<LobbyMenu>();
-
-            if (!lobby)
-            {
-                return;
-            }
+            if (!lobby) return;
 
             lobby.FAENEDGHCPN?.Clear();
             lobby.NIBAENPHGKO?.Clear();

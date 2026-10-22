@@ -1,4 +1,4 @@
-namespace S3_NullServers.Room
+namespace NullServers.Room
 {
     internal static class RoomLabels
     {
@@ -27,21 +27,20 @@ namespace S3_NullServers.Room
 
         internal static string FormatPlayerCount(string text, int playerCount, int maxPlayers)
         {
-            if (!text.StartsWith("<size=", StringComparison.Ordinal))
-            {
-                return text;
-            }
+            if (!text.StartsWith("<size=", StringComparison.Ordinal)) return text;
 
             int start = text.IndexOf('>') + 1;
             int slash = text.IndexOf('/', start);
-
             int end = text.LastIndexOf("</size>", StringComparison.Ordinal);
 
-            if (slash <= start ||
+            if 
+            (
+                slash <= start ||
                 end <= slash ||
                 !int.TryParse(text.AsSpan(start, slash - start), out var count) ||
                 !int.TryParse(text.AsSpan(slash + 1, end - slash - 1), out _) ||
-                count != playerCount)
+                count != playerCount
+            )
             {
                 return text;
             }

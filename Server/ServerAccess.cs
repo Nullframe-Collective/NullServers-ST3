@@ -3,13 +3,13 @@ using Il2Cpp;
 using Il2CppFishNet.Connection;
 using Il2CppFishNet.Transporting.Relay;
 using MelonLoader.Utils;
-using S3_NullServers.Network;
-using S3_NullServers.Players;
-using S3_NullServers.Room;
+using NullServers.Network;
+using NullServers.Players;
+using NullServers.Room;
 using System.Text.Json;
 using UnityEngine;
 
-namespace S3_NullServers.Server
+namespace NullServers.Server
 {
     internal sealed class ServerAccess
     {
@@ -26,23 +26,20 @@ namespace S3_NullServers.Server
         private float _nextState;
         private string _pendingNotice;
 
-        internal BanList Mutes
-        {
-            get;
-        } = new(
+        internal BanList Mutes { get; } = new
+        (
             Path.Combine(MelonEnvironment.UserDataDirectory, "NullFrame", "mutes.json"),
-            "mute list");
+            "mute list"
+        );
 
         internal bool CanOpen => _control.CanManage || (InRoom && _roomId == _control.Room.Id && _state?.Trusted == true);
 
-        internal string Status
-        {
-            get; private set;
-        }
+        internal string Status { get; private set; }
 
         internal bool IsAdministrator(int id)
         {
-            return _control.CanManage &&
+            return 
+                _control.CanManage &&
                 (id == RelayProtocol.HostPlayerId ||
                 _control.TryIdentity(id, out var identity) &&
                 _permissions.Allows(id, identity.Username));
@@ -51,9 +48,7 @@ namespace S3_NullServers.Server
         private bool InRoom => _session.IsNullFrame && !_session.IsSwitching && _control.Room != null;
 
         internal IReadOnlyList<RoomPlayer> Players => _control.CanManage ? HostPlayers() : _state?.Players ?? Array.Empty<RoomPlayer>();
-
         internal IReadOnlyList<BanEntry> Bans => _control.CanManage ? _control.Bans.Entries : _state?.Bans ?? Array.Empty<BanEntry>();
-
         internal IReadOnlyList<BanEntry> MutedAccounts => _control.CanManage ? Mutes.Entries : _state?.Mutes ?? Array.Empty<BanEntry>();
 
         internal ServerAccess(HarmonyLib.Harmony harmony, ServerControl control, RelaySession session, PlayerProfiles profiles)
@@ -62,8 +57,10 @@ namespace S3_NullServers.Server
             _control = control;
             _session = session;
             _profiles = profiles;
+
             profiles.ServerMessageReceived += ReceiveRequest;
             profiles.ServerMessageReceivedFromHost += ReceiveState;
+
             harmony.Patch(
                 AccessTools.Method(typeof(MultiplayerChat), nameof(MultiplayerChat.NBHNJMHGGCL)),
                 prefix: new HarmonyMethod(typeof(ServerAccess), nameof(BeforeChatMessage)));
@@ -90,17 +87,17 @@ namespace S3_NullServers.Server
                 _pendingNotice = null;
             }
 
-            if (!_control.CanManage || Time.unscaledTime < _nextState)
-            {
-                return;
-            }
+            if (!_control.CanManage || Time.unscaledTime < _nextState) return;
 
             _nextState = Time.unscaledTime + 1f;
             foreach (int id in _permissions.Clients.ToArray())
             {
-                if (!_control.Manager.ServerManager.Clients.ContainsKey(id) ||
+                if 
+                (
+                    !_control.Manager.ServerManager.Clients.ContainsKey(id) ||
                     !_control.TryIdentity(id, out var identity) ||
-                    !_permissions.Allows(id, identity.Username))
+                    !_permissions.Allows(id, identity.Username)
+                )
                 {
                     _permissions.Revoke(id);
                 }
@@ -109,18 +106,18 @@ namespace S3_NullServers.Server
             RoomPlayer[] players = HostPlayers();
             foreach (NetworkConnection connection in _control.Connections())
             {
-                if (!connection.IsAuthenticated)
-                {
-                    continue;
-                }
+                if (!connection.IsAuthenticated) continue;
 
                 bool trusted = players.Any(player => player.Id == connection.ClientId && player.Trusted);
-                ServerState state = new(
+                ServerState state = new
+                (
                     trusted,
                     players,
                     trusted ? _control.Bans.Entries.Take(100).ToArray() : Array.Empty<BanEntry>(),
-                    trusted ? Mutes.Entries.Take(100).ToArray() : Array.Empty<BanEntry>());
+                    trusted ? Mutes.Entries.Take(100).ToArray() : Array.Empty<BanEntry>()
+                );
                 string json = JsonSerializer.Serialize(state);
+
                 if (_sentStates.GetValueOrDefault(connection.ClientId) == json)
                 {
                     continue;
@@ -128,8 +125,12 @@ namespace S3_NullServers.Server
 
                 _sentStates[connection.ClientId] = json;
                 _profiles.SendServerMessage(new ServerMessage(1, roomId, State: state), connection);
-                if (players.Any(player => player.Id == connection.ClientId && player.Muted) &&
-                    !_lastMuteNotice.ContainsKey(connection.ClientId))
+
+                if 
+                (
+                    players.Any(player => player.Id == connection.ClientId && player.Muted) &&
+                    !_lastMuteNotice.ContainsKey(connection.ClientId)
+                )
                 {
                     NotifyMuted(connection);
                 }
@@ -150,39 +151,48 @@ namespace S3_NullServers.Server
         {
             return _control.Connections()
             .Where(connection => connection.IsAuthenticated)
-            .Select(connection => _control.TryIdentity(connection.ClientId, out var identity)
-                ? new RoomPlayer(
+            .Select
+            (
+                connection => _control.TryIdentity(connection.ClientId, out var identity)
+                ? new RoomPlayer
+                (
                     connection.ClientId,
                     identity.Username,
                     _control.PlayerName(connection.ClientId, identity),
                     identity.IsGuest,
                     _permissions.Allows(connection.ClientId, identity.Username),
-                    Mutes.Contains(identity.Username)) : null)
+                    Mutes.Contains(identity.Username)
+                ) : null
+            )
             .Where(player => player != null).OrderBy(player => player.Id).ToArray();
         }
 
         internal bool Submit(ServerRequest request, out string error)
         {
             error = "Only the host or a trusted administrator can do this.";
-            if (!CanOpen || _control.CanManage)
-            {
-                return false;
-            }
+
+            if (!CanOpen || _control.CanManage) return false;
 
             _profiles.SendServerMessage(new ServerMessage(1, _control.Room.Id, Request: request), toServer: true);
+
             error = null;
             Status = "Command sent to the host...";
+
             return true;
         }
 
         internal bool SetTrusted(int id, string account, bool trusted, out string error)
         {
             error = "Only the host can grant or revoke administrator access.";
-            if (!_control.CanManage ||
+
+            if 
+            (
+                !_control.CanManage ||
                 id == RelayProtocol.HostPlayerId ||
                 !_control.TryIdentity(id, out var identity) ||
                 identity.Username != account ||
-                !_control.Manager.ServerManager.Clients.ContainsKey(id))
+                !_control.Manager.ServerManager.Clients.ContainsKey(id)
+            )
             {
                 return false;
             }
@@ -203,6 +213,7 @@ namespace S3_NullServers.Server
             _nextState = 0f;
             Notice(id, trusted ? "The host granted you Server Settings access." : "The host revoked your Server Settings access.");
             error = null;
+
             return true;
         }
 
@@ -214,18 +225,27 @@ namespace S3_NullServers.Server
             }
 
             error = "The selected account is unavailable.";
-            if (string.IsNullOrWhiteSpace(account) ||
+
+            if 
+            (
+                string.IsNullOrWhiteSpace(account) ||
                 (id >= 0 &&
                 (!_control.TryIdentity(id, out var identity) ||
                 identity.Username != account)) ||
                 id == RelayProtocol.HostPlayerId ||
                 (_control.TryIdentity(RelayProtocol.HostPlayerId, out var host) &&
-                string.Equals(host.Username, account, StringComparison.OrdinalIgnoreCase)))
+                string.Equals(host.Username, account, StringComparison.OrdinalIgnoreCase))
+            )
             {
                 return false;
             }
 
-            if (!(muted ? Mutes.Add(account, id >= 0 ? _control.PlayerName(id, null) : account, out error) : Mutes.Remove(account, out error)))
+            if 
+            (
+                !(muted ? Mutes.Add(account, id >= 0 ? 
+                _control.PlayerName(id, null) : account, out error) : 
+                Mutes.Remove(account, out error))
+            )
             {
                 return false;
             }
@@ -233,9 +253,14 @@ namespace S3_NullServers.Server
             _nextState = 0f;
             if (id >= 0)
             {
-                Notice(
+                Notice
+                (
                     id,
-                    muted ? "The host muted your chat. You cannot send messages until you are unmuted." : "The host unmuted your chat.");
+                    muted ? 
+                    "The host muted your chat. You cannot send messages until you are unmuted." : 
+                    "The host unmuted your chat."
+                );
+
                 if (muted)
                 {
                     _lastMuteNotice[id] = Time.unscaledTime;
@@ -251,11 +276,14 @@ namespace S3_NullServers.Server
 
         private void ReceiveRequest(NetworkConnection connection, ServerMessage message)
         {
-            if (!_control.CanManage ||
+            if 
+            (
+                !_control.CanManage ||
                 message.RoomId != _control.Room.Id ||
                 message.Request == null ||
                 !connection.IsValid ||
-                !connection.IsAuthenticated)
+                !connection.IsAuthenticated
+            )
             {
                 return;
             }
@@ -275,8 +303,8 @@ namespace S3_NullServers.Server
 
             ServerRequest request = message.Request;
             string error;
-            bool success = request.Action switch
 
+            bool success = request.Action switch
             {
                 ServerAction.Kick => _control.Kick(request.PlayerId, request.Account, false, out error),
                 ServerAction.Ban => _control.Kick(request.PlayerId, request.Account, true, out error),
@@ -295,6 +323,7 @@ namespace S3_NullServers.Server
                 ServerAction.Unmute => SetMuted(request.PlayerId, request.Account, false, out error),
                 _ => InvalidAction(out error)
             };
+
             _nextState = 0f;
             Notice(id, success ? "Command accepted by the host." : error ?? "The command could not be completed.");
         }
@@ -307,10 +336,7 @@ namespace S3_NullServers.Server
 
         private void ReceiveState(ServerMessage message)
         {
-            if (!InRoom || message.RoomId != _control.Room.Id)
-            {
-                return;
-            }
+            if (!InRoom || message.RoomId != _control.Room.Id) return;
 
             if (message.State != null)
             {
@@ -346,16 +372,20 @@ namespace S3_NullServers.Server
         private static bool BeforeChatMessage(NetworkConnection __2)
         {
             ServerAccess instance = _instance;
-            if (!instance._control.CanManage ||
+            if 
+            (
+                !instance._control.CanManage ||
                 __2 == null ||
                 !__2.IsAuthenticated ||
                 !instance._control.TryIdentity(__2.ClientId, out var identity) ||
-                !instance.Mutes.Contains(identity.Username))
+                !instance.Mutes.Contains(identity.Username)
+            )
             {
                 return true;
             }
 
             instance.NotifyMuted(__2);
+
             return false;
         }
     }

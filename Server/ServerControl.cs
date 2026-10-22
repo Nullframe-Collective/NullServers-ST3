@@ -10,16 +10,16 @@ using Il2CppFishNet.Transporting.Relay;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using MelonLoader;
 using MelonLoader.Utils;
-using S3_NullServers.Network;
-using S3_NullServers.Players;
-using S3_NullServers.Room;
+using NullServers.Network;
+using NullServers.Players;
+using NullServers.Room;
 using System.Text;
 using System.Text.Json.Nodes;
 using UnityEngine;
 using SceneManager = UnityEngine.SceneManagement.SceneManager;
 using SceneUtility = UnityEngine.SceneManagement.SceneUtility;
 
-namespace S3_NullServers.Server
+namespace NullServers.Server
 {
     internal sealed class ServerControl
     {
@@ -46,32 +46,19 @@ namespace S3_NullServers.Server
         private float _deadline;
         private float _nextUpdate;
 
-        internal BanList Bans
-        {
-            get;
-        }
-        internal ServerAccess Access
-        {
-            get;
-        }
-        internal HostTools Tools
-        {
-            get;
-        }
-        internal AntiCrash Protection
-        {
-            get;
-        }
+        internal BanList Bans { get; }
+        internal ServerAccess Access { get; }
+        internal HostTools Tools { get; }
+        internal AntiCrash Protection { get; }
 
         internal IReadOnlyList<string> Maps => _maps;
-
         internal IReadOnlyDictionary<string, string> Modes => _modes;
 
         internal RelayRoomInfo Room => _session.Relay ? _session.Relay.CurrentRoom : null;
-
         internal NetworkManager Manager => NetBootstrap.GJDGDIGECJN ? NetBootstrap.GJDGDIGECJN.HLNKMGIBPIG : null;
 
-        internal bool CanManage => _session.IsNullFrame &&
+        internal bool CanManage => 
+            _session.IsNullFrame &&
             !_session.IsSwitching &&
             _session.Relay &&
             !_session.Relay.OfflineMode &&
@@ -82,28 +69,28 @@ namespace S3_NullServers.Server
             Manager.ServerManager.Started;
 
         internal bool Busy => _pendingRevision != null;
+        internal string Status { get; private set; }
 
-        internal string Status
-        {
-            get; private set;
-        }
-
-        internal ServerControl(
+        internal ServerControl
+        (
             HarmonyLib.Harmony harmony,
             RelaySession session,
             PlayerProfiles profiles,
-            MelonLogger.Instance logger)
+            MelonLogger.Instance logger = null
+        )
         {
             _instance = this;
             _session = session;
             _profiles = profiles;
             _logger = logger;
             _roundSync = new RoundSync(harmony, session, profiles, logger);
+
             profiles.RoundSignalReceived += OnRoundSignal;
+
             Bans = new BanList(Path.Combine(MelonEnvironment.UserDataDirectory, "NullFrame", "bans.json"));
             if (Bans.LoadError != null)
             {
-                logger.Warning(Bans.LoadError);
+                logger?.Warning(Bans.LoadError);
             }
 
             Access = new ServerAccess(harmony, this, session, profiles);
@@ -111,7 +98,7 @@ namespace S3_NullServers.Server
             Protection = new AntiCrash(harmony, this, logger);
             if (Access.Mutes.LoadError != null)
             {
-                logger.Warning(Access.Mutes.LoadError);
+                logger?.Warning(Access.Mutes.LoadError);
             }
 
             harmony.Patch(
@@ -121,20 +108,22 @@ namespace S3_NullServers.Server
                 AccessTools.Method(typeof(RelayTransport), nameof(RelayTransport.Relay_OnRoomUpdated)),
                 postfix: new HarmonyMethod(typeof(ServerControl), nameof(AfterRoomUpdated)));
             harmony.Patch(
-                AccessTools.Method(
-                    typeof(GUI),
-                    nameof(GUI.Label),
-                    new[]
-            {
-                typeof(Rect),
-                typeof(string),
-                typeof(GUIStyle)
-            }),
-                prefix: new HarmonyMethod(typeof(ServerControl), nameof(BeforeRoomCaption)),
-                finalizer: new HarmonyMethod(typeof(ServerControl), nameof(AfterRoomCaption)));
-            harmony.Patch(
                 AccessTools.PropertySetter(typeof(UnityEngine.UI.Text), nameof(UnityEngine.UI.Text.text)),
                 prefix: new HarmonyMethod(typeof(ServerControl), nameof(BeforeCaptionText)));
+
+            harmony.Patch(
+                AccessTools.Method
+                (
+                    typeof(GUI),
+                    nameof(GUI.Label),
+                    [
+                        typeof(Rect),
+                        typeof(string),
+                        typeof(GUIStyle)
+                    ]
+                ),
+                prefix: new HarmonyMethod(typeof(ServerControl), nameof(BeforeRoomCaption)),
+                finalizer: new HarmonyMethod(typeof(ServerControl), nameof(AfterRoomCaption)));
         }
 
         private static void CaptureCatalog(LobbyMenu __instance)
@@ -142,6 +131,7 @@ namespace S3_NullServers.Server
             ServerControl instance = _instance;
             instance._maps.Clear();
             instance._modes.Clear();
+
             foreach (LobbyMenu.AllModes mode in __instance.MHDLCNKEEGN)
             {
                 if (mode != null && !string.IsNullOrEmpty(mode.modeID) && mode.modeID != "THR")
@@ -159,32 +149,36 @@ namespace S3_NullServers.Server
                 __instance.KFFNCDCDCPI
             })
             {
-                if (list != null)
+                if (list == null) continue;
+
+                foreach (LobbyMenu.AllMaps map in list)
                 {
-                    foreach (LobbyMenu.AllMaps map in list)
-                    {
-                        if (map != null)
-                        {
-                            names.Add((string)map.mapName);
-                        }
-                    }
+                    if (map == null) continue;
+
+                    names.Add((string)map.mapName);
                 }
             }
 
             for (int index = 0; index < SceneManager.sceneCountInBuildSettings; index++)
             {
                 string scene = Path.GetFileNameWithoutExtension(SceneUtility.GetScenePathByBuildIndex(index));
-                if (names.Contains(scene) ||
-                    names.Any(name => scene == name + " (Day)" ||
-                    scene == name + " (Dusk)" ||
-                    scene == name + " (Night)"))
+                if 
+                (
+                    names.Contains(scene) ||
+                    names.Any
+                    (
+                        name => scene == name + " (Day)" ||
+                        scene == name + " (Dusk)" ||
+                        scene == name + " (Night)"
+                    )
+               )
                 {
                     instance._maps.Add(scene);
                 }
             }
 
             instance._maps.Sort(StringComparer.Ordinal);
-            instance._logger.Msg($"Server settings catalog: {instance._maps.Count} maps, {instance._modes.Count} modes.");
+            instance._logger?.Msg($"Server settings catalog: {instance._maps.Count} maps, {instance._modes.Count} modes.");
         }
 
         internal string PlayerName(int id, RelayPlayerIdentity identity)
@@ -223,12 +217,15 @@ namespace S3_NullServers.Server
             }
 
             error = "This player is no longer available.";
-            if (!CanManage ||
+            if 
+            (
+                !CanManage ||
                 id == _session.Relay.LocalPlayerId ||
                 !Manager.ServerManager.Clients.TryGetValue(id, out var connection) ||
                 !connection.IsValid ||
                 !TryIdentity(id, out var identity) ||
-                identity.Username != expectedAccount)
+                identity.Username != expectedAccount
+            )
             {
                 return false;
             }
@@ -249,6 +246,7 @@ namespace S3_NullServers.Server
             Announce(nickname, ban ? "was banned by the host" : "was kicked by the host");
             Status = $"{nickname}: {(ban ? "banned" : "kicked")}.";
             error = null;
+
             return true;
         }
 
@@ -276,6 +274,7 @@ namespace S3_NullServers.Server
             }
 
             Status = $"Ban removed: {account}.";
+
             return true;
         }
 
@@ -298,37 +297,35 @@ namespace S3_NullServers.Server
                 banned = Bans.Add(account, nickname, out var error);
                 if (!banned)
                 {
-                    _logger.Warning("Anti-Crash could not persist the ban: " + error);
+                    _logger?.Warning("Anti-Crash could not persist the ban: " + error);
                 }
             }
 
             string action = banned ? "banned" : "kicked";
-            if (Manager.ServerManager.Clients.TryGetValue(connection.ClientId, out var current) &&
+            if 
+            (
+                Manager.ServerManager.Clients.TryGetValue(connection.ClientId, out var current) &&
                 current.Pointer == connection.Pointer &&
-                current.IsValid)
+                current.IsValid
+            )
             {
                 Disconnect(connection, "NullFrame Anti-Crash: " + reason + ".");
             }
 
             Status = $"{nickname} was {action} by NullFrame Anti-Crash.";
-            _logger.Warning($"Anti-Crash {action} client {connection.ClientId} ({account}): {reason}.");
+            _logger?.Warning($"Anti-Crash {action} client {connection.ClientId} ({account}): {reason}.");
             _protectionNotices.Enqueue((nickname, action));
+
             return true;
         }
 
         private void FlushProtectionNotices()
         {
-            if (_protectionNotices.Count == 0)
-            {
-                return;
-            }
+            if (_protectionNotices.Count == 0) return;
 
             RoomMultiplayerMenu menu = RoomMultiplayerMenu.GJDGDIGECJN;
             WhoKilledWho feed = menu ? menu.GetComponent(Il2CppInterop.Runtime.Il2CppType.Of<WhoKilledWho>())?.Cast<WhoKilledWho>() : null;
-            if (!menu || !menu.CJNLEDLNGID || !feed || !feed.IsServerInitialized)
-            {
-                return;
-            }
+            if (!menu || !menu.CJNLEDLNGID || !feed || !feed.IsServerInitialized) return;
 
             while (_protectionNotices.TryDequeue(out var notice))
             {
@@ -340,58 +337,64 @@ namespace S3_NullServers.Server
         {
             if (!CanManage)
             {
-                return Access.Submit(
+                return Access.Submit
+                (
                     new ServerRequest(ServerAction.Room, Name: name, Capacity: capacity, Color: color),
-                    out error);
+                    out error
+                );
             }
 
             error = "Wait for the current update to finish.";
             return CanManage && !Busy && RequestUpdate(name, capacity, color, new JsonObject(), null, out error);
         }
 
-        internal bool RestartRound(
+        internal bool RestartRound
+        (
             string scene,
             string mode,
             int minutes,
             int custards,
             int difficulty,
             bool muteGuests,
-            out string error)
+            out string error
+        )
         {
             if (!CanManage)
             {
-                return Access.Submit(
-                    new ServerRequest(
+                return Access.Submit
+                (
+                    new ServerRequest
+                    (
                         ServerAction.Round,
                         Scene: scene,
                         Mode: mode,
                         Minutes: minutes,
                         Custards: custards,
                         Difficulty: difficulty,
-                        MuteGuests: muteGuests),
-                    out error);
+                        MuteGuests: muteGuests
+                    ),
+                    out error
+                );
             }
 
             error = "Only the current host can restart the round.";
-            if (!CanManage || Busy)
-            {
-                return false;
-            }
+            if (!CanManage || Busy) return false;
 
             if (!_maps.Contains(scene) || !_modes.ContainsKey(mode) || !Application.CanStreamedLevelBeLoaded(scene))
             {
                 error = "Choose an available map and game mode.";
+
                 return false;
             }
 
             if (minutes < 1 || minutes > 60 || custards < 1 || custards > 200 || difficulty < 0 || difficulty > 3)
             {
                 error = "Check the round duration, custards and difficulty.";
+
                 return false;
             }
 
             JsonObject changes = new()
-
             {
                 ["MapName"] = scene,
                 ["GameMode"] = mode,
@@ -401,19 +404,24 @@ namespace S3_NullServers.Server
                 ["MuteGuests"] = muteGuests,
                 ["IsOpen"] = false
             };
+
             _session.HoldRoomClosed = true;
-            if (RequestUpdate(
+
+            if (RequestUpdate
+            (
                 RoomName.ReadDisplay(Room.RoomData, Room.Name),
                 Room.MaxPlayers,
                 RoomOptions.ReadNameColor(Room.RoomData) ?? "#FFFFFF",
                 changes,
                 scene,
-                out error))
+                out error
+            ))
             {
                 return true;
             }
 
             _session.HoldRoomClosed = false;
+
             return false;
         }
 
@@ -425,50 +433,58 @@ namespace S3_NullServers.Server
             }
 
             error = "Only the current host can reopen the room.";
-            return CanManage &&
+
+            return 
+                CanManage &&
                 !Busy &&
-                RequestUpdate(
-                RoomName.ReadDisplay(Room.RoomData, Room.Name),
-                Room.MaxPlayers,
-                RoomOptions.ReadNameColor(Room.RoomData) ?? "#FFFFFF",
-                new JsonObject
-                {
-                ["IsOpen"] = true
-                },
-                null,
-                out error);
+                RequestUpdate
+                (
+                    RoomName.ReadDisplay(Room.RoomData, Room.Name),
+                    Room.MaxPlayers,
+                    RoomOptions.ReadNameColor(Room.RoomData) ?? "#FFFFFF",
+                    new JsonObject
+                    {
+                    ["IsOpen"] = true
+                    },
+                    null,
+                    out error
+                );
         }
 
         private bool RequestUpdate(string name, int capacity, string color, JsonObject changes, string scene, out string error)
         {
             string revision = Guid.NewGuid().ToString("N");
             changes["SettingsRevision"] = revision;
+
             _pendingRoom = Room.Id;
             _pendingRevision = revision;
             _pendingScene = scene;
             _acknowledged = _loading = false;
             _deadline = Time.unscaledTime + 15f;
+
             if (_session.UpdateRoom(name, capacity, color, changes, out error))
             {
                 Status = "Waiting for the relay to confirm the settings...";
+
                 return true;
             }
 
             ClearPending();
+
             return false;
         }
 
-        private static void AfterRoomUpdated(RelayRoomInfo __0)
+        private static void AfterRoomUpdated(RelayRoomInfo info)
         {
             ServerControl instance = _instance;
-            if (__0.Id != instance._pendingRoom || instance._pendingRevision == null)
+            if (info.Id != instance._pendingRoom || instance._pendingRevision == null)
             {
                 return;
             }
 
-            if (JsonNode.Parse(__0.RoomData)?["SettingsRevision"]?.GetValue<string>() == instance._pendingRevision)
+            if (JsonNode.Parse(info.RoomData)?["SettingsRevision"]?.GetValue<string>() == instance._pendingRevision)
             {
-                instance._pendingData = __0.RoomData;
+                instance._pendingData = info.RoomData;
                 instance._acknowledged = true;
             }
         }
@@ -476,14 +492,12 @@ namespace S3_NullServers.Server
         internal void Update()
         {
             Protection.Update();
-            if (Time.unscaledTime < _nextUpdate)
-            {
-                return;
-            }
+            if (Time.unscaledTime < _nextUpdate) return;
 
             _nextUpdate = Time.unscaledTime + 0.25f;
             _roundSync.Update();
             Access.Update();
+
             if (!CanManage)
             {
                 _protectionNotices.Clear();
@@ -494,16 +508,20 @@ namespace S3_NullServers.Server
 
                 ClearPending();
                 _lastKick.Clear();
+
                 return;
             }
 
             foreach (NetworkConnection connection in Connections())
             {
-                if (connection.ClientId != _session.Relay.LocalPlayerId &&
+                if 
+                (
+                    connection.ClientId != _session.Relay.LocalPlayerId &&
                     TryIdentity(connection.ClientId, out var identity) &&
                     !identity.IsGuest &&
                     Bans.Contains(identity.Username) &&
-                    (!_lastKick.TryGetValue(connection.ClientId, out var last) || Time.unscaledTime - last >= 2f))
+                    (!_lastKick.TryGetValue(connection.ClientId, out var last) || Time.unscaledTime - last >= 2f)
+                )
                 {
                     Disconnect(connection, "This account is banned by the host.");
                 }
@@ -520,6 +538,7 @@ namespace S3_NullServers.Server
             if (!Busy)
             {
                 FlushProtectionNotices();
+
                 return;
             }
 
@@ -531,6 +550,7 @@ namespace S3_NullServers.Server
                 }
 
                 ClearPending();
+
                 return;
             }
 
@@ -538,20 +558,19 @@ namespace S3_NullServers.Server
             {
                 Status = _loading ? "Loading timed out. Check players, then reopen the room or retry the round." :
                     "The relay did not confirm the update. Check the current room settings before retrying.";
-                _logger.Warning(Status);
+                _logger?.Warning(Status);
+
                 if (_loading)
                 {
                     _roundSync.CancelSpawns();
                 }
 
                 ClearPending();
+
                 return;
             }
 
-            if (!_acknowledged)
-            {
-                return;
-            }
+            if (!_acknowledged) return;
 
             if (_pendingScene == null)
             {
@@ -562,30 +581,37 @@ namespace S3_NullServers.Server
             {
                 LoadRound();
             }
-            else if (!Manager.SceneManager.IteratingQueue &&
-                     SceneManager.GetActiveScene().name == _pendingScene &&
-                     SceneManager.GetActiveScene().handle != _previousSceneHandle &&
-                     RoomMultiplayerMenu.GJDGDIGECJN &&
-                     RoomMultiplayerMenu.GJDGDIGECJN != _previousMenu &&
-                     RoomMultiplayerMenu.GJDGDIGECJN.IsServerInitialized &&
-                     RoomMultiplayerMenu.GJDGDIGECJN.CJNLEDLNGID &&
-                     Connections().All(connection =>
-                     !connection.IsAuthenticated ||
-                     (connection.Scenes.Contains(SceneManager.GetSceneByName(_pendingScene)) &&
-                     (connection.ClientId == _session.Relay.LocalPlayerId ||
-                     _readyClients.Contains(connection.ClientId)))))
+            else if 
+            (
+                !Manager.SceneManager.IteratingQueue &&
+                SceneManager.GetActiveScene().name == _pendingScene &&
+                SceneManager.GetActiveScene().handle != _previousSceneHandle &&
+                RoomMultiplayerMenu.GJDGDIGECJN &&
+                RoomMultiplayerMenu.GJDGDIGECJN != _previousMenu &&
+                RoomMultiplayerMenu.GJDGDIGECJN.IsServerInitialized &&
+                RoomMultiplayerMenu.GJDGDIGECJN.CJNLEDLNGID &&
+                Connections().All(connection =>
+                !connection.IsAuthenticated ||
+                (connection.Scenes.Contains(SceneManager.GetSceneByName(_pendingScene)) &&
+                (connection.ClientId == _session.Relay.LocalPlayerId ||
+                _readyClients.Contains(connection.ClientId))))
+            )
             {
-                _logger.Msg($"Round ready: {_pendingScene}; {RoomProperties.Current.GameMode}; {Connections().Length} players.");
+                _logger?.Msg($"Round ready: {_pendingScene}; {RoomProperties.Current.GameMode}; {Connections().Length} players.");
                 _profiles.Synchronize();
+
                 NetworkObject networkObject = RoomMultiplayerMenu.GJDGDIGECJN.NetworkObject;
-                RoundSignal signal = new(
+                RoundSignal signal = new
+                (
                     1,
                     _pendingRoom,
                     _pendingRevision,
                     _pendingScene,
                     true,
                     networkObject.ObjectId,
-                    sceneId: networkObject.SceneId);
+                    sceneId: networkObject.SceneId
+                );
+
                 foreach (NetworkConnection connection in Connections())
                 {
                     if (connection.IsAuthenticated && connection.ClientId != _session.Relay.LocalPlayerId)
@@ -598,6 +624,7 @@ namespace S3_NullServers.Server
                 _session.HoldRoomClosed = false;
                 ClearPending();
                 Reopen(out var error);
+
                 if (error != null)
                 {
                     Status = error;
@@ -605,20 +632,25 @@ namespace S3_NullServers.Server
             }
             else if (_loading && !Manager.SceneManager.IteratingQueue && SceneManager.GetActiveScene().name == _pendingScene)
             {
-                string waiting = string.Join(
+                string waiting = string.Join
+                (
                     ", ",
                     Connections()
                     .Where(connection => connection.IsAuthenticated &&
                     connection.ClientId != _session.Relay.LocalPlayerId &&
                     !_readyClients.Contains(connection.ClientId))
-                    .Select(connection => TryIdentity(connection.ClientId, out var identity) ? PlayerName(connection.ClientId, identity) : $"Player {connection.ClientId}"));
+                    .Select(connection => TryIdentity(connection.ClientId, out var identity) ? 
+                    PlayerName(connection.ClientId, identity) : $"Player {connection.ClientId}")
+                );
                 Status = waiting.Length == 0 ? "Initializing the room..." : "Waiting for player initialization: " + waiting;
             }
         }
 
         private void OnRoundSignal(NetworkConnection connection, RoundSignal signal)
         {
-            if (!CanManage ||
+            if 
+            (
+                !CanManage ||
                 !_loading ||
                 signal.RoomId != _pendingRoom ||
                 signal.Revision != _pendingRevision ||
@@ -626,17 +658,21 @@ namespace S3_NullServers.Server
                 !connection.IsValid ||
                 !connection.IsAuthenticated ||
                 connection.ClientId == _session.Relay.LocalPlayerId ||
-                !connection.Scenes.Contains(SceneManager.GetSceneByName(_pendingScene)))
+                !connection.Scenes.Contains(SceneManager.GetSceneByName(_pendingScene))
+            )
             {
                 return;
             }
 
             RoomMultiplayerMenu menu = RoomMultiplayerMenu.GJDGDIGECJN;
-            if (!menu ||
+            if
+            (
+                !menu ||
                 menu == _previousMenu ||
                 !menu.IsServerInitialized ||
                 menu.gameObject.scene.name != _pendingScene ||
-                Manager.SceneManager.IteratingQueue)
+                Manager.SceneManager.IteratingQueue
+            )
             {
                 return;
             }
@@ -646,7 +682,7 @@ namespace S3_NullServers.Server
                 _pendingSceneProbes.Remove(connection.ClientId);
                 if (_readyClients.Add(connection.ClientId))
                 {
-                    _logger.Msg($"Client {connection.ClientId} confirmed round initialization: {_pendingScene}; room object {signal.ObjectId}.");
+                    _logger?.Msg($"Client {connection.ClientId} confirmed round initialization: {_pendingScene}; room object {signal.ObjectId}.");
                 }
 
                 return;
@@ -655,9 +691,12 @@ namespace S3_NullServers.Server
             NetworkObject networkObject = menu.NetworkObject;
             if (signal.Missing)
             {
-                if (signal.ObjectId != networkObject.ObjectId ||
+                if 
+                (
+                    signal.ObjectId != networkObject.ObjectId ||
                     signal.SceneId != networkObject.SceneId ||
-                    !_pendingSceneProbes.Remove(connection.ClientId))
+                    !_pendingSceneProbes.Remove(connection.ClientId)
+                )
                 {
                     return;
                 }
@@ -668,13 +707,14 @@ namespace S3_NullServers.Server
                 bool observing = networkObject.Observers.Contains(connection);
                 string details = $"client {connection.ClientId}; object {networkObject.ObjectId}; sceneId {networkObject.SceneId}; " +
                     $"observerBefore={wasObserver}; observerAfter={observing}.";
+
                 if (observing)
                 {
-                    _logger.Msg("Room spawn queued again: " + details);
+                    _logger?.Msg("Room spawn queued again: " + details);
                 }
                 else
                 {
-                    _logger.Warning("Room spawn still blocked by observer state: " + details);
+                    _logger?.Warning("Room spawn still blocked by observer state: " + details);
                 }
 
                 return;
@@ -691,21 +731,25 @@ namespace S3_NullServers.Server
             {
                 if (!_pendingSceneProbes.Contains(connection.ClientId))
                 {
-                    _logger.Msg($"Room spawn probe for client {connection.ClientId}: object {networkObject.ObjectId}; " +
+                    _logger?.Msg($"Room spawn probe for client {connection.ClientId}: object {networkObject.ObjectId}; " +
                         $"sceneId {networkObject.SceneId}; observer={networkObject.Observers.Contains(connection)}.");
                 }
 
                 _pendingSceneProbes.Add(connection.ClientId);
-                _profiles.SendRoundSignal(
-                    new RoundSignal(
+                _profiles.SendRoundSignal
+                (
+                    new RoundSignal
+                    (
                         1,
                         _pendingRoom,
                         _pendingRevision,
                         _pendingScene,
                         false,
                         networkObject.ObjectId,
-                        sceneId: networkObject.SceneId),
-                    connection);
+                        sceneId: networkObject.SceneId
+                    ),
+                    connection
+                );
             }
         }
 
@@ -715,6 +759,7 @@ namespace S3_NullServers.Server
             _readyClients.Clear();
             _lastSceneSync.Clear();
             _pendingSceneProbes.Clear();
+
             PlayerInfo[] players = UnityEngine.Object.FindObjectsOfType<PlayerInfo>().Where(player => player.IsServerInitialized).ToArray();
             foreach (PlayerInfo player in players)
             {
@@ -723,21 +768,24 @@ namespace S3_NullServers.Server
             }
 
             SceneLoadData load = new(_pendingScene)
-
             {
                 ReplaceScenes = ReplaceOption.All
             };
+
             load.MovedNetworkObjects = new Il2CppReferenceArray<NetworkObject>(players.Select(player => player.NetworkObject)
                 .Where(networkObject => !networkObject.IsGlobal).ToArray());
             load.Params.ClientParams = new Il2CppStructArray<byte>(Encoding.UTF8.GetBytes("NFROUND1|" + _pendingRoom + "|" + _pendingData));
+
             // Player Awake looks up the active room; all clients must initialize it before any avatar is created.
             _roundSync.HoldSpawns();
             _loading = true;
             _previousMenu = RoomMultiplayerMenu.GJDGDIGECJN;
             _previousSceneHandle = SceneManager.GetActiveScene().handle;
             _deadline = Time.unscaledTime + 120f;
+
             Status = "Loading the new round for all players...";
-            _logger.Msg($"Round transition: {_pendingScene}; {RoomProperties.Current.GameMode}.");
+            _logger?.Msg($"Round transition: {_pendingScene}; {RoomProperties.Current.GameMode}.");
+
             try
             {
                 UnityEngine.SceneManagement.Scene current = SceneManager.GetSceneByName(_pendingScene);
@@ -756,7 +804,7 @@ namespace S3_NullServers.Server
             catch (Il2CppInterop.Runtime.Il2CppException exception)
             {
                 Status = "The round could not be loaded. Reopen the room or retry.";
-                _logger.Error(exception);
+                _logger?.Error(exception);
                 _roundSync.CancelSpawns();
                 ClearPending();
             }
@@ -779,13 +827,14 @@ namespace S3_NullServers.Server
             __state = false;
             ServerControl instance = _instance;
             RelayRoomInfo room = instance.Room;
-            if (!instance._session.IsNullFrame || room == null || __1 == null)
-            {
-                return;
-            }
 
-            if (__1.StartsWith(room.Name, StringComparison.Ordinal) &&
-                __1.Contains("Room ID: " + room.Id, StringComparison.Ordinal))
+            if (!instance._session.IsNullFrame || room == null || __1 == null) return;
+
+            if 
+            (
+                __1.StartsWith(room.Name, StringComparison.Ordinal) &&
+                __1.Contains("Room ID: " + room.Id, StringComparison.Ordinal)
+            )
             {
                 __1 = RoomName.Render(room.Name, room.RoomData) + __1[room.Name.Length..];
                 if (__2 != null && !__2.richText)
@@ -800,11 +849,15 @@ namespace S3_NullServers.Server
         {
             ServerControl instance = _instance;
             RelayRoomInfo room = instance.Room;
-            if (instance._session.IsNullFrame &&
+
+            if 
+            (
+                instance._session.IsNullFrame &&
                 room != null &&
                 __0 != null &&
                 __0.StartsWith(room.Name, StringComparison.Ordinal) &&
-                __0.Contains("Room ID: " + room.Id, StringComparison.Ordinal))
+                __0.Contains("Room ID: " + room.Id, StringComparison.Ordinal)
+            )
             {
                 __0 = RoomName.Render(room.Name, room.RoomData) + __0[room.Name.Length..];
                 __instance.supportRichText = true;

@@ -1,7 +1,7 @@
 using Il2Cpp;
 using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
-using S3_NullServers.Customization;
+using NullServers.Customization;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -9,7 +9,7 @@ using UnityEngine;
 using UnityEngine.Rendering;
 using Object = UnityEngine.Object;
 
-namespace S3_NullServers.Sandbox
+namespace NullServers.Sandbox
 {
     internal sealed class SandboxAssets : IDisposable
     {
@@ -57,9 +57,12 @@ namespace S3_NullServers.Sandbox
 
         internal void Capture()
         {
-            foreach (Entry entry in _entries.Values.Where(entry => !entry.Primitive.HasValue &&
+            foreach
+            (
+                Entry entry in _entries.Values.Where(entry => !entry.Primitive.HasValue &&
                 !entry.Source &&
-                !entry.Id.StartsWith("kit:", StringComparison.Ordinal)).ToArray())
+                !entry.Id.StartsWith("kit:", StringComparison.Ordinal)).ToArray()
+            )
             {
                 _entries.Remove(entry.Id);
                 if (_icons.Remove(entry.Id, out var icon) && icon)
@@ -85,10 +88,7 @@ namespace S3_NullServers.Sandbox
                     foreach (Volume.option option in category.options)
                     {
                         string path = option == null ? null : (string)option.resourcePath;
-                        if (string.IsNullOrEmpty(path) || path.Length > 170)
-                        {
-                            continue;
-                        }
+                        if (string.IsNullOrEmpty(path) || path.Length > 170) continue;
 
                         GameObject source = Resources.Load(path, Il2CppType.Of<GameObject>())?.Cast<GameObject>();
                         if (SafeProp(source))
@@ -99,10 +99,7 @@ namespace S3_NullServers.Sandbox
                 }
             }
 
-            if (Time.unscaledTime < _nextCapture)
-            {
-                return;
-            }
+            if (Time.unscaledTime < _nextCapture) return;
 
             _nextCapture = Time.unscaledTime + 15f;
             foreach (GameObject source in Resources.FindObjectsOfTypeAll<GameObject>())
@@ -114,18 +111,18 @@ namespace S3_NullServers.Sandbox
             }
 
             RoomMultiplayerMenu room = RoomMultiplayerMenu.GJDGDIGECJN;
-            if (!room)
-            {
-                return;
-            }
+            if (!room) return;
 
             foreach (MeshFilter filter in Object.FindObjectsOfType<MeshFilter>())
             {
-                if (!filter.sharedMesh ||
+                if 
+                (
+                    !filter.sharedMesh ||
                     filter.gameObject.scene != room.gameObject.scene ||
                     filter.sharedMesh.vertexCount > 100000 ||
                     _entries.Count >= 512 ||
-                    filter.GetComponentsInChildren<MeshFilter>().Length != 1)
+                    filter.GetComponentsInChildren<MeshFilter>().Length != 1
+                )
                 {
                     continue;
                 }
@@ -133,15 +130,18 @@ namespace S3_NullServers.Sandbox
                 bool excluded = false;
                 for (Transform node = filter.transform; node; node = node.parent)
                 {
-                    if (node.name.StartsWith("NullFrame", StringComparison.Ordinal) ||
+                    if 
+                    (
                         node.GetComponent(Il2CppType.Of<PlayerNetworkController>()) ||
                         node.GetComponent(Il2CppType.Of<PlayerMonster>()) ||
                         node.GetComponent(Il2CppType.Of<Bot>()) ||
                         node.GetComponent(Il2CppType.Of<Volume>()) ||
                         node.GetComponent(Il2CppType.Of<RagdollController>()) ||
-                        node.GetComponent(Il2CppType.Of<FPScontroller>()))
+                        node.GetComponent(Il2CppType.Of<FPScontroller>())
+                    )
                     {
                         excluded = true;
+
                         break;
                     }
                 }
@@ -154,21 +154,30 @@ namespace S3_NullServers.Sandbox
 
                 Bounds bounds = filter.sharedMesh.bounds;
                 Renderer renderer = filter.GetComponent(Il2CppType.Of<Renderer>())?.Cast<Renderer>();
-                string signature = filter.sharedMesh.name + "|" + filter.sharedMesh.vertexCount + "|" +
-                    string.Join(
-                    "|",
-                    new[]
-                {
-                        bounds.center.x,
-                        bounds.center.y,
-                        bounds.center.z,
-                        bounds.size.x,
-                        bounds.size.y,
-                        bounds.size.z
-                    }
-                        .Select(value => value.ToString("R", CultureInfo.InvariantCulture))) + "|" +
-                    (renderer ? string.Join("|", renderer.sharedMaterials.Select(material => material ? material.name : "")) : "");
-                string id = "scene:" + room.gameObject.scene.name + ":" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(signature))).Substring(0, 24);
+
+                string signature = 
+                    filter.sharedMesh.name + "|" + 
+                    filter.sharedMesh.vertexCount + "|" +
+                    string.Join
+                    (
+                        "|",
+                        new[]
+                        {
+                            bounds.center.x,
+                            bounds.center.y,
+                            bounds.center.z,
+                            bounds.size.x,
+                            bounds.size.y,
+                            bounds.size.z
+                        }
+                        .Select(value => value.ToString("R", CultureInfo.InvariantCulture))) + 
+                        "|" +
+                        (renderer ? 
+                        string.Join("|", renderer.sharedMaterials.Select(material => material ? material.name : "")
+                    ) : "");
+
+                string id = string.Concat("scene:", room.gameObject.scene.name, ":", Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(signature))).AsSpan(0, 24));
+
                 if (id.Length <= 192)
                 {
                     Add(new Entry(id, filter.name, null, filter.gameObject));
@@ -178,9 +187,12 @@ namespace S3_NullServers.Sandbox
 
         private static bool SafeProp(GameObject source)
         {
-            if (!source ||
+            if 
+            (
+                !source ||
                 source.name.StartsWith("NullFrame", StringComparison.Ordinal) ||
-                source.GetComponentsInChildren<Transform>(true).Length > 128)
+                source.GetComponentsInChildren<Transform>(true).Length > 128
+            )
             {
                 return false;
             }
@@ -197,14 +209,12 @@ namespace S3_NullServers.Sandbox
                 Il2CppType.Of<RagdollController>()
             })
             {
-                if (source.GetComponentInChildren(type, true))
-                {
-                    return false;
-                }
+                if (source.GetComponentInChildren(type, true)) return false;
             }
 
             var meshes = source.GetComponentsInChildren<MeshFilter>(true);
-            return meshes.Length is > 0 and <= 32 &&
+            return 
+                meshes.Length is > 0 and <= 32 &&
                 meshes.All(mesh => !mesh.sharedMesh || mesh.sharedMesh.vertexCount < 100000);
         }
 
@@ -213,10 +223,7 @@ namespace S3_NullServers.Sandbox
         internal GameObject Create(string id, bool collision)
         {
             Entry entry = Find(id);
-            if (entry == null)
-            {
-                return null;
-            }
+            if (entry == null) return null;
 
             if (id.StartsWith("kit:", StringComparison.Ordinal))
             {
@@ -250,20 +257,19 @@ namespace S3_NullServers.Sandbox
             }
             else
             {
-                if (!entry.Source)
-                {
-                    return null;
-                }
+                if (!entry.Source) return null;
 
                 root = CloneVisual(entry.Source, "NullFrameBuild");
                 if (id.StartsWith("scene:", StringComparison.Ordinal))
                 {
                     Mesh mesh = entry.Source.GetComponent(Il2CppType.Of<MeshFilter>()).Cast<MeshFilter>().sharedMesh;
-                    root.transform.localScale = Vector3.one / Mathf.Max(
+                    root.transform.localScale = Vector3.one / Mathf.Max
+                    (
                         0.01f,
                         mesh.bounds.size.x,
                         mesh.bounds.size.y,
-                        mesh.bounds.size.z);
+                        mesh.bounds.size.z
+                    );
                 }
 
                 if (collision)
@@ -301,15 +307,13 @@ namespace S3_NullServers.Sandbox
         private void RenderIcon(Entry entry)
         {
             GameObject root = Create(entry.Id, false);
-            if (!root)
-            {
-                return;
-            }
+            if (!root) return;
 
             GameObject cameraObject = new("NullFramePropCamera");
             GameObject lightObject = new("NullFramePropLight");
             RenderTexture texture = new(128, 128, 16, RenderTextureFormat.ARGB32);
             RenderTexture previous = RenderTexture.active;
+
             try
             {
                 root.transform.position = new Vector3(0f, -18000, 0f);
@@ -361,10 +365,8 @@ namespace S3_NullServers.Sandbox
         {
             var renderers = root.GetComponentsInChildren<Renderer>();
             Bounds bounds = new(root.transform.position, Vector3.one * 0.1f);
-            if (renderers.Length == 0)
-            {
-                return bounds;
-            }
+
+            if (renderers.Length == 0) return bounds;
 
             bounds = renderers[0].bounds;
             for (int index = 1; index < renderers.Length; index++)

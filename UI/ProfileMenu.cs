@@ -1,10 +1,10 @@
 using HarmonyLib;
 using Il2Cpp;
-using S3_NullServers.Network;
-using S3_NullServers.Players;
+using NullServers.Network;
+using NullServers.Players;
 using UnityEngine;
 
-namespace S3_NullServers.UI
+namespace NullServers.UI
 {
     internal sealed class ProfileMenu
     {
@@ -27,35 +27,39 @@ namespace S3_NullServers.UI
             _profiles = profiles;
             _picker = picker;
             _nickname = profiles.Local.Nickname;
+
             profiles.LocalChanged += profile =>
             {
                 _nickname = profile.Nickname;
                 _editing = false;
             };
+
             harmony.Patch(
                 AccessTools.Method(typeof(LobbyMenu), nameof(LobbyMenu.BAGGECEDBML)),
                 prefix: new HarmonyMethod(typeof(ProfileMenu), nameof(BeforeBrowser)),
                 postfix: new HarmonyMethod(typeof(ProfileMenu), nameof(AfterBrowser)),
                 finalizer: new HarmonyMethod(typeof(ProfileMenu), nameof(EndBrowser)));
             harmony.Patch(
-                AccessTools.Method(
-                    typeof(GUI),
-                    nameof(GUI.TextField),
-                    new[]
-            {
-                typeof(Rect),
-                typeof(string),
-                typeof(int)
-            }),
-                prefix: new HarmonyMethod(typeof(ProfileMenu), nameof(BeforeRoomField)));
-            harmony.Patch(
-                AccessTools.Method(typeof(GUI), nameof(GUI.Box), new[] { typeof(Rect), typeof(string) }),
+                AccessTools.Method(typeof(GUI), nameof(GUI.Box), [typeof(Rect), typeof(string)]),
                 prefix: new HarmonyMethod(typeof(ProfileMenu), nameof(BeforeBrowserBox)));
             harmony.Patch(
                 AccessTools.Method(typeof(LobbyMenu), nameof(LobbyMenu.OnGUI)),
                 prefix: new HarmonyMethod(typeof(ProfileMenu), nameof(BeforeLobbyGUI)),
                 postfix: new HarmonyMethod(typeof(ProfileMenu), nameof(AfterLobbyGUI)),
                 finalizer: new HarmonyMethod(typeof(ProfileMenu), nameof(EndLobbyGUI)));
+
+            harmony.Patch(
+                AccessTools.Method
+                (
+                    typeof(GUI),
+                    nameof(GUI.TextField),
+                    [
+                        typeof(Rect),
+                        typeof(string),
+                        typeof(int)
+                    ]
+                ),
+                prefix: new HarmonyMethod(typeof(ProfileMenu), nameof(BeforeRoomField)));
         }
 
         private static void BeforeBrowser(LobbyMenu __instance)
@@ -76,9 +80,11 @@ namespace S3_NullServers.UI
         {
             if (_instance._drawingBrowser && __0.height > Screen.height * 0.5f)
             {
-                __0.height = Mathf.Min(
+                __0.height = Mathf.Min
+                (
                     __0.height + Screen.height / 17f + 4f,
-                    Screen.height - Screen.height / 17f * 1.1f - __0.y);
+                    Screen.height - Screen.height / 17f * 1.1f - __0.y
+                );
             }
         }
 
@@ -86,11 +92,9 @@ namespace S3_NullServers.UI
         {
             ProfileMenu instance = _instance;
             instance._drawingBrowser = false;
+
             Rect rect = instance._roomField;
-            if (rect.width <= 0f || __instance.EJLDOIOJGPC)
-            {
-                return;
-            }
+            if (rect.width <= 0f || __instance.EJLDOIOJGPC) return;
 
             if (instance._label == null)
             {
@@ -98,6 +102,7 @@ namespace S3_NullServers.UI
                 {
                     richText = false
                 };
+
                 instance._input = new GUIStyle(GUI.skin.textField)
                 {
                     richText = false
@@ -106,29 +111,40 @@ namespace S3_NullServers.UI
 
             bool oldEnabled = GUI.enabled;
             GUI.enabled = oldEnabled && !instance._session.IsSwitching;
+
             rect.y += rect.height + 4f;
             instance._label.fontSize = instance._input.fontSize = Mathf.Max(13, Screen.height / 30);
-            GUI.Label(
+
+            GUI.Label
+            (
                 new Rect(rect.x - Screen.width * 0.14f, rect.y, Screen.width * 0.13f, rect.height),
                 "Nickname",
-                instance._label);
+                instance._label
+            );
+
             if (!instance._editing && string.IsNullOrWhiteSpace(instance._nickname))
             {
                 instance._nickname = instance._profiles.DefaultName;
             }
 
-            GUI.SetNextControlName("NullFrameNickname");
+            GUI.SetNextControlName("Nickname");
             instance._nicknameField = new Rect(rect.x, rect.y, rect.width - rect.height - 8f, rect.height);
-            instance._nickname = GUI.TextField(
+            instance._nickname = GUI.TextField
+            (
                 instance._nicknameField,
                 instance._nickname,
                 PlayerProfile.NameLimit * 2,
-                instance._input);
-            bool focused = GUI.GetNameOfFocusedControl() == "NullFrameNickname";
-            if ((instance._editing && !focused) ||
+                instance._input
+            );
+
+            bool focused = GUI.GetNameOfFocusedControl() == "Nickname";
+            if 
+            (
+                (instance._editing && !focused) ||
                 (focused &&
                 Event.current.type == EventType.KeyDown &&
-                Event.current.keyCode == KeyCode.Return))
+                Event.current.keyCode == KeyCode.Return)
+            )
             {
                 instance.Commit();
                 GUI.FocusControl(null);
@@ -139,11 +155,13 @@ namespace S3_NullServers.UI
             if (ColorPicker.Swatch(swatch, instance._profiles.Local.ColorHex))
             {
                 instance.Commit();
-                instance._picker.Open(
+                instance._picker.Open
+                (
                     swatch,
                     instance._profiles.Local.ColorHex,
                     color => instance._profiles.Save(instance._nickname, color),
-                    sample: instance._nickname);
+                    sample: instance._nickname
+                );
             }
 
             GUI.enabled = oldEnabled;
@@ -160,24 +178,27 @@ namespace S3_NullServers.UI
         private static void BeforeLobbyGUI(out bool __state)
         {
             __state = GUI.enabled;
-            if (_instance._editing &&
+
+            if 
+            (
+                _instance._editing &&
                 Event.current.type == EventType.MouseDown &&
-                !_instance._nicknameField.Contains(Event.current.mousePosition))
+                !_instance._nicknameField.Contains(Event.current.mousePosition)
+            )
             {
                 _instance.Commit();
             }
 
-            if (_instance._editing && Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Return)
+            if (_instance._editing && 
+                Event.current.type == EventType.KeyDown && 
+                Event.current.keyCode == KeyCode.Return)
             {
                 _instance.Commit();
                 GUI.FocusControl(null);
                 Event.current.Use();
             }
 
-            if (!_instance._picker.IsOpen)
-            {
-                return;
-            }
+            if (!_instance._picker.IsOpen) return;
 
             _instance._picker.HandleInput();
             if (Event.current.type != EventType.Layout && Event.current.type != EventType.Repaint)
@@ -189,6 +210,7 @@ namespace S3_NullServers.UI
         private static void AfterLobbyGUI(LobbyMenu __instance, bool __state)
         {
             GUI.enabled = __state;
+
             if (_instance._session.IsNullFrame && !__instance.EJLDOIOJGPC)
             {
                 _instance._picker.Draw(__instance.BIPMFIBNFBC);

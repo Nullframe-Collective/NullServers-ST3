@@ -1,16 +1,17 @@
 using MelonLoader;
-using S3_NullServers.Customization;
-using S3_NullServers.Network;
-using S3_NullServers.Players;
-using S3_NullServers.Room;
-using S3_NullServers.Sandbox;
-using S3_NullServers.Server;
-using S3_NullServers.UI;
+using NullServers.Customization;
+using NullServers.Network;
+using NullServers.Players;
+using NullServers.Room;
+using NullServers.Sandbox;
+using NullServers.Server;
+using NullServers.UI;
 
-[assembly: MelonInfo(typeof(S3_NullServers.Core), "S3-NullServers", "0.0.20", "NullFrame Collective", null)]
+[assembly: MelonInfo(typeof(NullServers.Core), "NullServers", "0.0.20", "NullFrame Collective", "https://github.com/Nullframe-Collective/NullServers-ST3")]
 [assembly: MelonGame("ZeoWorks", "Slendytubbies 3")]
+[assembly: MelonColor(8, 115, 115, 115)]
 
-namespace S3_NullServers
+namespace NullServers
 {
     public class Core : MelonMod
     {
@@ -21,27 +22,30 @@ namespace S3_NullServers
         private PauseMenu _pauseMenu;
         private LiveAppearance _appearance;
         private AppearanceMenu _appearanceMenu;
-        private SandboxWorld _sandbox;
+        private SandboxWorld _sandboxWorld;
         private SandboxMenu _sandboxMenu;
+        private ServerMenu _serverMenu;
+        private RoomCustomization _roomCustomization;
+        private PlayerList _playerList;
 
         public override void OnInitializeMelon()
         {
             RoomOptions options = new();
-            RelaySession session = new(HarmonyInstance, LoggerInstance, options);
-            _profiles = new PlayerProfiles(HarmonyInstance, session, LoggerInstance);
+            RelaySession session = new(HarmonyInstance, options, LoggerInstance);
             ColorPicker picker = new();
+
+            _profiles = new PlayerProfiles(HarmonyInstance, session, LoggerInstance);
             _profileMenu = new ProfileMenu(HarmonyInstance, session, _profiles, picker);
             _serverControl = new ServerControl(HarmonyInstance, session, _profiles, LoggerInstance);
             _pauseMenu = new PauseMenu(session);
             _serverSettings = new ServerSettings(_serverControl, picker, _pauseMenu);
             _appearance = new LiveAppearance(HarmonyInstance, session, LoggerInstance);
             _appearanceMenu = new AppearanceMenu(_pauseMenu, _appearance, _profiles, picker);
-            _sandbox = new SandboxWorld(HarmonyInstance, _serverControl, _profiles, session);
-            _sandboxMenu = new SandboxMenu(HarmonyInstance, _sandbox);
-
-            _ = new ServerMenu(HarmonyInstance, LoggerInstance, session);
-            _ = new RoomCustomization(HarmonyInstance, session, options, picker);
-            _ = new PlayerList(HarmonyInstance, session, _profiles);
+            _sandboxWorld = new SandboxWorld(HarmonyInstance, _serverControl, _profiles, session);
+            _sandboxMenu = new SandboxMenu(HarmonyInstance, _sandboxWorld);
+            _serverMenu = new ServerMenu(HarmonyInstance, LoggerInstance, session);
+            _roomCustomization = new RoomCustomization(HarmonyInstance, session, options, picker);
+            _playerList = new PlayerList(HarmonyInstance, session, _profiles);
 
             LoggerInstance.Msg($"Initialized. NullFrame GameVersion: {RelaySession.NullFrameGameVersion}.");
         }
@@ -54,7 +58,7 @@ namespace S3_NullServers
             _pauseMenu?.Update();
             _serverSettings?.Update();
             _appearanceMenu?.Update();
-            _sandbox?.Update();
+            _sandboxWorld?.Update();
             _sandboxMenu?.Update();
         }
 
@@ -66,15 +70,15 @@ namespace S3_NullServers
 
         public override void OnLateUpdate()
         {
-            _sandbox?.Ragdolls.LateUpdate();
-            _sandbox?.Gun.LateUpdate();
+            _sandboxWorld?.Ragdolls.LateUpdate();
+            _sandboxWorld?.Gun.LateUpdate();
         }
 
-        public override void OnFixedUpdate() => _sandbox?.Gun.FixedUpdate();
+        public override void OnFixedUpdate() => _sandboxWorld?.Gun.FixedUpdate();
 
         public override void OnApplicationQuit()
         {
-            _sandbox?.Gun.Dispose();
+            _sandboxWorld?.Gun.Dispose();
             _profileMenu?.Commit();
         }
     }

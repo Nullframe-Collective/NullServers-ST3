@@ -1,11 +1,11 @@
 using HarmonyLib;
 using Il2Cpp;
 using Il2CppFishNet.Transporting.Relay;
-using S3_NullServers.Network;
-using S3_NullServers.UI;
+using NullServers.Network;
+using NullServers.UI;
 using UnityEngine;
 
-namespace S3_NullServers.Room
+namespace NullServers.Room
 {
     internal sealed class RoomCustomization
     {
@@ -44,66 +44,75 @@ namespace S3_NullServers.Room
                 finalizer: new HarmonyMethod(typeof(RoomCustomization), nameof(EndHostMenu)));
 
             harmony.Patch(
-                AccessTools.Method(typeof(GUI), nameof(GUI.Box), new[] { typeof(Rect), typeof(string) }),
+                AccessTools.Method(typeof(GUI), nameof(GUI.Box), [typeof(Rect), typeof(string)]),
                 prefix: new HarmonyMethod(typeof(RoomCustomization), nameof(BeforeSettingsPanel)));
+
             harmony.Patch(
-                AccessTools.Method(
+                AccessTools.Method
+                (
                     typeof(GUI),
                     nameof(GUI.TextField),
-                    new[]
-            {
-                    typeof(Rect),
-                    typeof(string),
-                    typeof(int),
-                    typeof(GUIStyle)
-                }),
+                    [
+                        typeof(Rect),
+                        typeof(string),
+                        typeof(int),
+                        typeof(GUIStyle)
+                    ]
+                ),
                 prefix: new HarmonyMethod(typeof(RoomCustomization), nameof(BeforeHostName)),
                 postfix: new HarmonyMethod(typeof(RoomCustomization), nameof(AfterHostName)),
                 finalizer: new HarmonyMethod(typeof(RoomCustomization), nameof(EndHostName)));
+
             harmony.Patch(
-                AccessTools.Method(
+                AccessTools.Method
+                (
                     typeof(GUI),
                     nameof(GUI.BeginScrollView),
-                    new[]
-            {
-                typeof(Rect),
-                typeof(Vector2),
-                typeof(Rect)
-            }),
+                    [
+                        typeof(Rect),
+                        typeof(Vector2),
+                        typeof(Rect)
+                    ]
+                ),
                 prefix: new HarmonyMethod(typeof(RoomCustomization), nameof(BeforeModeScrollView)));
+
             harmony.Patch(
                 AccessTools.Method(typeof(GUI), nameof(GUI.EndScrollView), Type.EmptyTypes),
                 postfix: new HarmonyMethod(typeof(RoomCustomization), nameof(AfterModeScrollView)));
+
             foreach (System.Reflection.MethodInfo method in new[]
             {
-                AccessTools.Method(
-                typeof(GUI),
-                nameof(GUI.Button),
-                new[]
-                {
-                    typeof(Rect),
-                    typeof(GUIContent),
-                    typeof(GUIStyle)
-                }),
-                AccessTools.Method(
-                typeof(GUI),
-                nameof(GUI.Toggle),
-                new[]
-                {
-                    typeof(Rect),
-                    typeof(bool),
-                    typeof(string)
-                }),
-                AccessTools.Method(
-                typeof(GUI),
-                nameof(GUI.HorizontalSlider),
-                new[]
-                {
-                    typeof(Rect),
-                    typeof(float),
-                    typeof(float),
-                    typeof(float)
-                })
+                AccessTools.Method
+                (
+                    typeof(GUI),
+                    nameof(GUI.Button),
+                    [
+                        typeof(Rect),
+                        typeof(GUIContent),
+                        typeof(GUIStyle)
+                    ]
+                ),
+                AccessTools.Method
+                (
+                    typeof(GUI),
+                    nameof(GUI.Toggle),
+                    [
+                        typeof(Rect),
+                        typeof(bool),
+                        typeof(string)
+                    ]
+                ),
+                AccessTools.Method
+                (
+                    typeof(GUI),
+                    nameof(GUI.HorizontalSlider),
+                    [
+                        typeof(Rect),
+                        typeof(float),
+                        typeof(float),
+                        typeof(float)
+                    ]
+                )
             })
             {
                 harmony.Patch(
@@ -118,15 +127,16 @@ namespace S3_NullServers.Room
                 finalizer: new HarmonyMethod(typeof(RoomCustomization), nameof(AfterRoomBrowser)));
 
             harmony.Patch(
-                AccessTools.Method(
+                AccessTools.Method
+                (
                     typeof(GUI),
                     nameof(GUI.Label),
-                    new[]
-            {
-                typeof(Rect),
-                typeof(string),
-                typeof(GUIStyle)
-            }),
+                    [
+                        typeof(Rect),
+                        typeof(string),
+                        typeof(GUIStyle)
+                    ]
+                ),
                 prefix: new HarmonyMethod(typeof(RoomCustomization), nameof(BeforeLabel)),
                 finalizer: new HarmonyMethod(typeof(RoomCustomization), nameof(AfterSettingsControl)));
         }
@@ -145,11 +155,13 @@ namespace S3_NullServers.Room
                 {
                     richText = false
                 };
+
                 _inputStyle = new GUIStyle(GUI.skin.textField)
                 {
                     richText = false,
                     alignment = TextAnchor.MiddleCenter
                 };
+
                 _previewStyle = new GUIStyle(_labelStyle)
                 {
                     richText = true,
@@ -166,10 +178,13 @@ namespace S3_NullServers.Room
             float contentHeight = y + row * 6.5f;
             Color oldColor = GUI.color;
             bool oldEnabled = GUI.enabled;
+
             GUI.color = Color.white;
             GUI.enabled = oldEnabled && !_session.IsSwitching;
+
             _settingsScroll.y = Mathf.Clamp(_settingsScroll.y, 0f, Mathf.Max(0f, contentHeight - _settingsViewport.height));
-            _settingsScroll = GUI.BeginScrollView(
+            _settingsScroll = GUI.BeginScrollView
+            (
                 _settingsViewport,
                 _settingsScroll,
                 new Rect(0f, 0f, width, contentHeight),
@@ -177,17 +192,17 @@ namespace S3_NullServers.Room
                 true,
                 GUI.skin.horizontalScrollbar,
                 GUI.skin.verticalScrollbar,
-                GUIStyle.none);
+                GUIStyle.none
+            );
+
             try
             {
-                if (menu.EGDMPMDBJIK)
-                {
-                    return;
-                }
+                if (menu.EGDMPMDBJIK) return;
 
                 float innerWidth = width - padding * 2f;
                 GUI.Label(new Rect(padding, y, innerWidth * 0.58f, row), "Max Players", _labelStyle);
-                GUI.SetNextControlName("NullFramePlayers");
+                GUI.SetNextControlName("Players");
+
                 string input = GUI.TextField(new Rect(width * 0.68f, y, width * 0.25f, row), _playerInput, 2, _inputStyle);
                 if (input.Length == 0)
                 {
@@ -199,17 +214,19 @@ namespace S3_NullServers.Room
                     _playerInput = _options.MaxPlayers.ToString();
                 }
 
-                if (GUI.GetNameOfFocusedControl() != "NullFramePlayers")
+                if (GUI.GetNameOfFocusedControl() != "Players")
                 {
                     _playerInput = _options.MaxPlayers.ToString();
                 }
 
                 y += row * 1.2f;
-                int selected = Mathf.RoundToInt(GUI.HorizontalSlider(
-                        new Rect(padding, y, innerWidth, row),
-                        _options.MaxPlayers,
-                        1f,
-                        RoomOptions.PlayerLimit));
+                int selected = Mathf.RoundToInt(GUI.HorizontalSlider
+                (
+                    new Rect(padding, y, innerWidth, row),
+                    _options.MaxPlayers,
+                    1f,
+                    RoomOptions.PlayerLimit
+                ));
                 if (selected != _options.MaxPlayers)
                 {
                     _options.MaxPlayers = selected;
@@ -218,17 +235,20 @@ namespace S3_NullServers.Room
 
                 y += row * 1.1f;
                 GUI.Label(new Rect(padding, y, innerWidth * 0.55f, row), "Room Name Color", _labelStyle);
-                GUI.SetNextControlName("NullFrameNameColor");
-                _colorInput = GUI.TextField(
+                GUI.SetNextControlName("NameColor");
+
+                _colorInput = GUI.TextField
+                (
                     new Rect(width * 0.56f, y, width * 0.37f - row - padding, row),
                     _colorInput,
                     7,
-                    _inputStyle);
+                    _inputStyle
+                );
                 if (RoomOptions.IsValidColor(_colorInput))
                 {
                     _options.NameColor = _colorInput.ToUpperInvariant();
                 }
-                else if (GUI.GetNameOfFocusedControl() != "NullFrameNameColor")
+                else if (GUI.GetNameOfFocusedControl() != "NameColor")
                 {
                     _colorInput = _options.NameColor;
                 }
@@ -236,11 +256,14 @@ namespace S3_NullServers.Room
                 Rect swatch = new(width * 0.93f - row, y, row, row);
                 if (ColorPicker.Swatch(swatch, _options.NameColor))
                 {
-                    Rect anchor = new(
+                    Rect anchor = new
+                    (
                         _settingsViewport.x + swatch.x,
                         _settingsViewport.y + swatch.y - _settingsScroll.y,
                         row,
-                        row);
+                        row
+                    );
+
                     Action<string> updateColor = color => _colorInput = _options.NameColor = color;
                     RoomName.TryParse(_options.DisplayName ?? menu.JEGIAEANOII, out _, out var sample, out _);
                     _picker.Open(anchor, _options.NameColor, updateColor, updateColor, sample ?? "Room Name");
@@ -249,20 +272,24 @@ namespace S3_NullServers.Room
                 y += row * 1.2f;
                 if (RoomName.TryParse(_options.DisplayName ?? menu.JEGIAEANOII, out _, out var display, out var error))
                 {
-                    GUI.Label(
+                    GUI.Label
+                    (
                         new Rect(padding, y, innerWidth, row * 1.5f),
                         $"<color={_options.NameColor}>{display}</color>  1/{_options.MaxPlayers}",
-                        _previewStyle);
+                        _previewStyle
+                    );
                 }
                 else
                 {
                     GUI.Label(new Rect(padding, y, innerWidth, row * 1.5f), error, _labelStyle);
                 }
 
-                GUI.Label(
+                GUI.Label
+                (
                     new Rect(padding, y + row * 1.5f, innerWidth, row * 1.5f),
                     "Partial color: <color=#FF5555>Red</color> White",
-                    _labelStyle);
+                    _labelStyle
+                );
             }
             finally
             {
@@ -275,12 +302,15 @@ namespace S3_NullServers.Room
         private static void BeforeHostMenu(LobbyMenu __instance)
         {
             RoomCustomization instance = _instance;
-            instance._hostMenu = instance._session.IsNullFrame &&
+            instance._hostMenu = 
+                instance._session.IsNullFrame &&
                 !__instance.BAJDIMCNBDM &&
                 instance._session.Relay &&
                 !instance._session.Relay.OfflineMode &&
                 !__instance.EJLDOIOJGPC ? __instance : null;
+
             instance._settingsPanel = default;
+
             if (instance._hostMenu && instance._nameMenu != __instance)
             {
                 instance._nameMenu = __instance;
@@ -288,18 +318,17 @@ namespace S3_NullServers.Room
             }
         }
 
-        private static void BeforeHostName(
+        private static void BeforeHostName
+        (
             Rect __0,
             ref string __1,
             ref int __2,
             GUIStyle __3,
-            out (bool Active, bool RichText) __state)
+            out (bool Active, bool RichText) __state
+        )
         {
             __state = (_instance._hostMenu && __0.x < Screen.width * 0.5f && __0.y < Screen.height * 0.3f, __3.richText);
-            if (!__state.Active)
-            {
-                return;
-            }
+            if (!__state.Active) return;
 
             __1 = _instance._options.DisplayName ?? __1;
             __2 = RoomName.MaxDisplayBytes;
@@ -308,10 +337,7 @@ namespace S3_NullServers.Room
 
         private static void AfterHostName(ref string __result, (bool Active, bool RichText) __state)
         {
-            if (!__state.Active)
-            {
-                return;
-            }
+            if (!__state.Active) return;
 
             _instance._options.DisplayName = __result;
             __result = RoomName.TryParse(__result, out var plain, out _, out _) ? plain : _instance._hostMenu.JEGIAEANOII;
@@ -334,54 +360,59 @@ namespace S3_NullServers.Room
             }
 
             instance._settingsPanel = __0;
+
             float padding = Mathf.Max(6f, Screen.width * 0.006f);
             float header = Mathf.Max(24f, Screen.height * 0.05f);
-            instance._settingsViewport = new Rect(
+            instance._settingsViewport = new Rect
+            (
                 __0.x + padding,
                 __0.y + header,
                 __0.width - padding * 2f,
-                __0.height - header - padding);
+                __0.height - header - padding
+            );
+
             instance._settingsContentWidth = instance._settingsViewport.width - Mathf.Max(16f, GUI.skin.verticalScrollbar.fixedWidth) - 4f;
         }
 
         private static void BeforeSettingsControl(ref Rect __0, out bool __state)
         {
             RoomCustomization instance = _instance;
-            __state = instance._hostMenu &&
+
+            __state = 
+                instance._hostMenu &&
                 !instance._modeScrollOpen &&
                 instance._settingsPanel.width > 0f &&
                 __0.x >= instance._settingsPanel.x - 1f &&
                 __0.xMax <= instance._settingsPanel.xMax + 1f &&
                 __0.y >= instance._settingsViewport.y &&
                 __0.yMax <= instance._settingsPanel.yMax + 1f;
-            if (!__state)
-            {
-                return;
-            }
+
+            if (!__state) return;
 
             // Native controls are interleaved with the map list, so each gets the same clipped viewport.
             Rect clip = instance._settingsViewport;
             clip.width = instance._settingsContentWidth;
             GUI.BeginGroup(clip);
+
             __0.position -= instance._settingsViewport.position + instance._settingsScroll;
         }
 
         private static void AfterSettingsControl(bool __state)
         {
-            if (__state)
-            {
-                GUI.EndGroup();
-            }
+            if (__state) GUI.EndGroup();
         }
 
         private static void BeforeModeScrollView(ref Rect __0, ref Rect __2)
         {
             RoomCustomization instance = _instance;
-            if (!instance._hostMenu ||
+            if 
+            (
+                !instance._hostMenu ||
                 !instance._hostMenu.EGDMPMDBJIK ||
                 instance._settingsPanel.width <= 0f ||
                 __0.x < instance._settingsPanel.x ||
-                __0.x >= instance._settingsPanel.xMax)
+                __0.x >= instance._settingsPanel.xMax
+            )
             {
                 return;
             }
@@ -389,19 +420,18 @@ namespace S3_NullServers.Room
             Rect clip = instance._settingsViewport;
             clip.width = instance._settingsContentWidth;
             GUI.BeginGroup(clip);
+
             __0.position -= clip.position + instance._settingsScroll;
             __0.width = Mathf.Min(__0.width, clip.width - __0.x);
             __0.height = Mathf.Max(1f, Mathf.Min(__0.height, clip.height - __0.y));
             __2.width = __0.width - Mathf.Max(16f, GUI.skin.verticalScrollbar.fixedWidth);
+
             instance._modeScrollOpen = true;
         }
 
         private static void AfterModeScrollView()
         {
-            if (!_instance._modeScrollOpen)
-            {
-                return;
-            }
+            if (!_instance._modeScrollOpen) return;
 
             _instance._modeScrollOpen = false;
             GUI.EndGroup();
@@ -434,6 +464,7 @@ namespace S3_NullServers.Room
         private static void BeforeLabel(ref Rect __0, ref string __1, out bool __state)
         {
             BeforeSettingsControl(ref __0, out __state);
+
             RoomCustomization instance = _instance;
             if (!instance._listMenu || !instance._session.IsNullFrame || string.IsNullOrEmpty(__1))
             {
@@ -441,10 +472,7 @@ namespace S3_NullServers.Room
             }
 
             var rooms = instance._listMenu.NIBAENPHGKO;
-            if (rooms == null)
-            {
-                return;
-            }
+            if (rooms == null) return;
 
             // The native browser draws each room name at x=0 inside its scroll view.
             if (__0.x == 0f && __1.StartsWith("<size=", StringComparison.Ordinal))
@@ -454,19 +482,18 @@ namespace S3_NullServers.Room
                     instance._nextRoom++;
                 }
 
-                if (instance._nextRoom >= rooms.Count)
-                {
-                    return;
-                }
+                if (instance._nextRoom >= rooms.Count) return;
 
                 RelayRoomInfo room = rooms[instance._nextRoom];
 
-                if (!RoomLabels.TryFormatName(
+                if (!RoomLabels.TryFormatName
+                (
                     __1,
                     room.Name,
                     instance._session.GetRoomNameColor(room.Id),
                     out var formatted,
-                    RoomName.ReadDisplay(room.RoomData, room.Name)))
+                    RoomName.ReadDisplay(room.RoomData, room.Name)
+                ))
                 {
                     return;
                 }
@@ -474,18 +501,18 @@ namespace S3_NullServers.Room
                 instance._nextRoom++;
                 instance._drawingRoom = room;
                 __1 = formatted;
+
                 return;
             }
 
-            if (instance._drawingRoom == null)
-            {
-                return;
-            }
+            if (instance._drawingRoom == null) return;
 
-            string countLabel = RoomLabels.FormatPlayerCount(
+            string countLabel = RoomLabels.FormatPlayerCount
+            (
                 __1,
                 instance._drawingRoom.PlayerCount,
-                instance._drawingRoom.MaxPlayers);
+                instance._drawingRoom.MaxPlayers
+            );
 
             if (countLabel != __1)
             {

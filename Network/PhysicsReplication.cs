@@ -1,9 +1,9 @@
-using S3_NullServers.Sandbox;
+using NullServers.Sandbox;
 using System.Text;
 using System.Text.Json;
 using UnityEngine;
 
-namespace S3_NullServers.Network
+namespace NullServers.Network
 {
     internal sealed class PhysicsReplication
     {
@@ -41,9 +41,12 @@ namespace S3_NullServers.Network
                 _samples[key] = sample = new Sample();
             }
 
-            if (sample.Pose.Position != null &&
+            if 
+            (
+                sample.Pose.Position != null &&
                 (SandboxWorld.Vector(sample.Pose.Position) - position).sqrMagnitude < 0.000001f &&
-                Quaternion.Angle(SandboxWorld.Quaternion(sample.Pose.Rotation), rotation) < 0.15f)
+                Quaternion.Angle(SandboxWorld.Quaternion(sample.Pose.Rotation), rotation) < 0.15f
+            )
             {
                 return;
             }
@@ -57,6 +60,7 @@ namespace S3_NullServers.Network
             foreach (var key in _samples.Keys.Where(key => key.Item1 == id).ToArray())
             {
                 _samples.Remove(key);
+
                 foreach (Peer peer in _peers.Values)
                 {
                     peer.Sent.Remove(key);
@@ -69,10 +73,7 @@ namespace S3_NullServers.Network
         internal void Update()
         {
             float now = Time.unscaledTime;
-            if (!_world.IsHost || now < _next)
-            {
-                return;
-            }
+            if (!_world.IsHost || now < _next) return;
 
             _next = now + 0.1f;
             Il2CppFishNet.Connection.NetworkConnection[] connections = _world.Peers().ToArray();
@@ -81,14 +82,12 @@ namespace S3_NullServers.Network
                 _peers.Remove(id);
             }
 
-            if (connections.Length == 0 || _samples.Count == 0)
-            {
-                return;
-            }
+            if (connections.Length == 0 || _samples.Count == 0) return;
 
             var samples = _samples.ToArray();
             var held = _world.Gun.HeldObjects.ToHashSet();
             var priority = samples.Where(pair => held.Contains(pair.Key.Item1)).ToArray();
+
             for (int connectionIndex = 0; connectionIndex < connections.Length; connectionIndex++)
             {
                 Il2CppFishNet.Connection.NetworkConnection connection = connections[(_peerCursor + connectionIndex) % connections.Length];
@@ -98,10 +97,7 @@ namespace S3_NullServers.Network
                 }
 
                 Il2Cpp.PlayerNetworkController avatar = SandboxWorld.Avatar(connection.ClientId);
-                if (!avatar)
-                {
-                    continue;
-                }
+                if (!avatar) continue;
 
                 Vector3 origin = avatar.transform.position;
                 List<PhysicsPose> poses = new(PhysicsPacket.MaxPoses);
@@ -116,16 +112,14 @@ namespace S3_NullServers.Network
 
                     keys.Add(pair.Key);
                     poses.Add(pair.Value.Pose);
+
                     if (poses.Count == PhysicsPacket.MaxPoses)
                     {
                         Flush();
                     }
                 }
 
-                if (poses.Count > 0)
-                {
-                    Flush();
-                }
+                if (poses.Count > 0) Flush();
 
                 for (int checkedCount = 0; checkedCount < samples.Length; checkedCount++)
                 {
@@ -136,16 +130,16 @@ namespace S3_NullServers.Network
                     }
 
                     var last = peer.Sent.GetValueOrDefault(pair.Key);
-                    if (held.Contains(pair.Key.Item1))
-                    {
-                        continue;
-                    }
+                    if (held.Contains(pair.Key.Item1)) continue;
 
                     float distance = (SandboxWorld.Vector(pair.Value.Pose.Position) - origin).sqrMagnitude;
-                    if (distance > 14400f ||
+                    if 
+                    (
+                        distance > 14400f ||
                         now - last.Time < (distance > 900f ? 0.5f : last.Revision == pair.Value.Revision ? 0.25f : 0.09f) ||
                         last.Revision == pair.Value.Revision &&
-                        last.Copies >= 3)
+                        last.Copies >= 3
+                    )
                     {
                         continue;
                     }
@@ -157,16 +151,10 @@ namespace S3_NullServers.Network
                         continue;
                     }
 
-                    if (!Flush())
-                    {
-                        break;
-                    }
+                    if (!Flush()) break;
                 }
 
-                if (poses.Count > 0)
-                {
-                    Flush();
-                }
+                if (poses.Count > 0) Flush();
 
                 bool Flush()
                 {
@@ -176,6 +164,7 @@ namespace S3_NullServers.Network
                         Data = PhysicsPacket.Encode(poses)
                     };
                     int bytes = Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(message, SandboxMessage.JsonOptions)) + 32;
+
                     if (!peer.Budget.Spend(bytes, now) || !_total.Spend(bytes, now))
                     {
                         poses.Clear();
@@ -193,6 +182,7 @@ namespace S3_NullServers.Network
 
                     poses.Clear();
                     keys.Clear();
+
                     return true;
                 }
             }
@@ -202,10 +192,7 @@ namespace S3_NullServers.Network
 
         internal void Receive(SandboxMessage message)
         {
-            if (!PhysicsPacket.TryDecode(message.Data, out var poses))
-            {
-                return;
-            }
+            if (!PhysicsPacket.TryDecode(message.Data, out var poses)) return;
 
             foreach (PhysicsPose pose in poses)
             {

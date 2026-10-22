@@ -1,12 +1,12 @@
 using Il2Cpp;
 using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
-using S3_NullServers.Network;
+using NullServers.Network;
 using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.UI;
 
-namespace S3_NullServers.UI
+namespace NullServers.UI
 {
     internal sealed class PauseMenu
     {
@@ -28,12 +28,10 @@ namespace S3_NullServers.UI
         private bool _blocksRaycasts;
         private float _nextScan;
 
-        internal RoomMultiplayerMenu Menu
-        {
-            get; private set;
-        }
+        internal RoomMultiplayerMenu Menu { get; private set; }
 
-        internal bool Available => _session.IsNullFrame &&
+        internal bool Available => 
+            _session.IsNullFrame &&
             !_session.IsSwitching &&
             _session.Relay &&
             _session.Relay.CurrentRoom != null &&
@@ -50,13 +48,17 @@ namespace S3_NullServers.UI
         internal void Update()
         {
             RoomMultiplayerMenu current = RoomMultiplayerMenu.GJDGDIGECJN;
-            if (current != Menu ||
+            if 
+            (
+                current != Menu ||
                 !_session.IsNullFrame ||
                 _session.IsSwitching ||
                 !_session.Relay ||
-                _session.Relay.CurrentRoom == null)
+                _session.Relay.CurrentRoom == null
+            )
             {
                 Restore(_owner);
+
                 foreach (Entry entry in _entries)
                 {
                     if (entry.Button)
@@ -80,37 +82,40 @@ namespace S3_NullServers.UI
                 Menu = current;
             }
 
-            if (!_session.IsNullFrame ||
+            if 
+            (
+                !_session.IsNullFrame ||
                 _session.IsSwitching ||
                 !current ||
                 !_session.Relay ||
-                _session.Relay.CurrentRoom == null)
+                _session.Relay.CurrentRoom == null
+            )
             {
                 return;
             }
 
             if (!_settings)
             {
-                if (Time.unscaledTime < _nextScan)
-                {
-                    return;
-                }
+                if (Time.unscaledTime < _nextScan) return;
 
                 _nextScan = Time.unscaledTime + 1f;
+
                 Button[] buttons = UnityEngine.Object.FindObjectsOfType<Button>(true)
                     .Where(button => button.gameObject.scene == current.gameObject.scene).ToArray();
+
                 _settings = buttons.FirstOrDefault(button => button.gameObject.name == "Settings" ||
                     FindText(button)?.text?.Trim().Equals("Settings", StringComparison.OrdinalIgnoreCase) == true);
-                if (!_settings)
-                {
-                    return;
-                }
+
+                if (!_settings) return;
 
                 Transform parent = _settings.transform.parent;
+
                 _resume = buttons.FirstOrDefault(button => button.transform.parent == parent &&
                     FindText(button)?.text?.Trim().Equals("Resume", StringComparison.OrdinalIgnoreCase) == true)?.transform.Cast<RectTransform>();
+
                 _quit = buttons.FirstOrDefault(button => button.transform.parent == parent &&
                     FindText(button)?.text?.Trim().Equals("Quit", StringComparison.OrdinalIgnoreCase) == true)?.transform.Cast<RectTransform>();
+
                 foreach (RectTransform rect in new[]
                 {
                     _resume,
@@ -126,6 +131,7 @@ namespace S3_NullServers.UI
 
                 _group = parent.GetComponent(Il2CppType.Of<CanvasGroup>())?.Cast<CanvasGroup>() ??
                     parent.gameObject.AddComponent(Il2CppType.Of<CanvasGroup>()).Cast<CanvasGroup>();
+
                 foreach (Entry entry in _entries)
                 {
                     entry.Button = CreateButton(_settings, entry);
@@ -147,10 +153,7 @@ namespace S3_NullServers.UI
                 changed = true;
             }
 
-            if (changed)
-            {
-                Layout();
-            }
+            if (changed) Layout();
         }
 
         private void Layout()
@@ -161,14 +164,16 @@ namespace S3_NullServers.UI
             }
 
             List<RectTransform> buttons = new()
-
             {
                 _resume,
                 _settings.transform.Cast<RectTransform>()
             };
+
             buttons.AddRange(_entries.Where(entry => entry.Button && entry.Button.gameObject.activeSelf)
                 .Select(entry => entry.Button.transform.Cast<RectTransform>()));
+
             buttons.Add(_quit);
+
             Vector2 step = (_original[_quit].Position - _original[_resume].Position) / (buttons.Count - 1);
             for (int index = 0; index < buttons.Count; index++)
             {
@@ -179,11 +184,20 @@ namespace S3_NullServers.UI
 
         private static Button CreateButton(Button template, Entry entry)
         {
-            GameObject clone = new(
+            GameObject clone = new
+            (
                 "NullFrame" + entry.Label.Replace(" ", ""),
-                new Il2CppReferenceArray<Il2CppSystem.Type>(
-                    new[] { Il2CppType.Of<RectTransform>(), Il2CppType.Of<Button>() }));
+                new Il2CppReferenceArray<Il2CppSystem.Type>
+                (
+                    [
+                        Il2CppType.Of<RectTransform>(), 
+                        Il2CppType.Of<Button>()
+                    ]
+                )
+            );
+
             RectTransform sourceRect = template.transform.Cast<RectTransform>();
+
             RectTransform rect = clone.transform.Cast<RectTransform>();
             rect.SetParent(template.transform.parent, false);
             rect.anchorMin = sourceRect.anchorMin;
@@ -192,26 +206,33 @@ namespace S3_NullServers.UI
             rect.sizeDelta = sourceRect.sizeDelta;
             rect.anchoredPosition = sourceRect.anchoredPosition;
             rect.SetSiblingIndex(template.transform.GetSiblingIndex() + 1);
+
             Button button = clone.GetComponent(Il2CppType.Of<Button>()).Cast<Button>();
             button.onClick = new Button.ButtonClickedEvent();
             button.onClick.AddListener(DelegateSupport.ConvertDelegate<UnityAction>(entry.Open));
             button.transition = template.transition;
             button.colors = template.colors;
+
             Text sourceText = FindText(template);
-            GameObject label = new(
+
+            GameObject label = new
+            (
                 "Label",
-                new Il2CppReferenceArray<Il2CppSystem.Type>(
-                    new[]
-            {
-                    Il2CppType.Of<RectTransform>(),
-                    Il2CppType.Of<CanvasRenderer>(),
-                    Il2CppType.Of<Text>()
-                }));
+                new Il2CppReferenceArray<Il2CppSystem.Type>
+                (
+                    [
+                        Il2CppType.Of<RectTransform>(),
+                        Il2CppType.Of<CanvasRenderer>(),
+                        Il2CppType.Of<Text>()
+                    ]
+                )
+            );
             RectTransform labelRect = label.transform.Cast<RectTransform>();
             labelRect.SetParent(rect, false);
             labelRect.anchorMin = Vector2.zero;
             labelRect.anchorMax = Vector2.one;
             labelRect.offsetMin = labelRect.offsetMax = Vector2.zero;
+
             Text text = label.GetComponent(Il2CppType.Of<Text>()).Cast<Text>();
             text.font = sourceText.font;
             text.fontSize = sourceText.fontSize;
@@ -224,6 +245,7 @@ namespace S3_NullServers.UI
             text.text = entry.Label;
             button.targetGraphic = text;
             clone.SetActive(entry.Visible());
+
             return button;
         }
 
@@ -242,15 +264,13 @@ namespace S3_NullServers.UI
             _blocksRaycasts = _group.blocksRaycasts;
             _group.alpha = 0f;
             _group.interactable = _group.blocksRaycasts = false;
+
             return true;
         }
 
         internal void Restore(object owner)
         {
-            if (_owner != owner)
-            {
-                return;
-            }
+            if (_owner != owner) return;
 
             if (_owner != null && _group)
             {

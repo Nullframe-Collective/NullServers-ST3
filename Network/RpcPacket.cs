@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-namespace S3_NullServers.Network
+namespace NullServers.Network
 {
     internal enum RpcSchema
     {
@@ -22,12 +22,15 @@ namespace S3_NullServers.Network
         {
             header = default;
             Cursor cursor = new(data);
-            if (!cursor.Int(out var objectId) ||
+            if 
+            (
+                !cursor.Int(out var objectId) ||
                 objectId < 0 ||
                 objectId >= 65535 ||
                 !cursor.Byte(out var spawned) ||
                 spawned != 1 ||
-                !cursor.Byte(out var component))
+                !cursor.Byte(out var component)
+            )
             {
                 return false;
             }
@@ -38,12 +41,10 @@ namespace S3_NullServers.Network
                 return false;
             }
 
-            if (length < 1 || length > MaxBytes)
-            {
-                return false;
-            }
+            if (length < 1 || length > MaxBytes) return false;
 
             header = new Header(objectId, component, cursor.Position, length);
+
             return true;
         }
 
@@ -58,7 +59,6 @@ namespace S3_NullServers.Network
         {
             Cursor cursor = new(data);
             bool valid = schema switch
-
             {
                 RpcSchema.Chat => cursor.String(2048) && cursor.String(2048),
                 RpcSchema.Appearance => cursor.Int(out var hat) &&
@@ -82,6 +82,7 @@ namespace S3_NullServers.Network
                 cursor.String(512),
                 _ => false
             };
+
             return valid && (!exact || cursor.Remaining == 0);
         }
 
@@ -89,10 +90,7 @@ namespace S3_NullServers.Network
         {
             private readonly ReadOnlySpan<byte> _data;
 
-            internal int Position
-            {
-                get; private set;
-            }
+            internal int Position { get; private set; }
 
             internal int Remaining => _data.Length - Position;
 
@@ -105,12 +103,10 @@ namespace S3_NullServers.Network
             internal bool Byte(out byte value)
             {
                 value = 0;
-                if (Remaining == 0)
-                {
-                    return false;
-                }
+                if (Remaining == 0) return false;
 
                 value = _data[Position++];
+
                 return true;
             }
 
@@ -118,6 +114,7 @@ namespace S3_NullServers.Network
             {
                 value = 0;
                 uint packed = 0;
+
                 for (int shift = 0; shift < 35; shift += 7)
                 {
                     if (!Byte(out var current) || shift == 28 && current > 15)
@@ -126,12 +123,10 @@ namespace S3_NullServers.Network
                     }
 
                     packed |= (uint)(current & 127) << shift;
-                    if ((current & 128) != 0)
-                    {
-                        continue;
-                    }
+                    if ((current & 128) != 0) continue;
 
                     value = (int)(packed >> 1) ^ -(int)(packed & 1);
+
                     return true;
                 }
 
@@ -140,12 +135,10 @@ namespace S3_NullServers.Network
 
             internal bool Skip(int count)
             {
-                if (count < 0 || count > Remaining)
-                {
-                    return false;
-                }
+                if (count < 0 || count > Remaining) return false;
 
                 Position += count;
+
                 return true;
             }
 
@@ -157,13 +150,11 @@ namespace S3_NullServers.Network
 
             internal bool Float(bool color = false)
             {
-                if (Remaining < 4)
-                {
-                    return false;
-                }
+                if (Remaining < 4) return false;
 
                 float value = BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32LittleEndian(_data.Slice(Position, 4)));
                 Position += 4;
+
                 return float.IsFinite(value) && (!color || value >= 0f && value <= 1f);
             }
 

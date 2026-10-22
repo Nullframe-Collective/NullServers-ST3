@@ -1,6 +1,7 @@
-namespace S3_NullServers.Sandbox
+namespace NullServers.Sandbox
 {
-    internal readonly record struct PhysGunInput(
+    internal readonly record struct PhysGunInput
+    (
         bool Allowed = false,
         bool Down = false,
         bool Held = false,
@@ -14,5 +15,6 @@ namespace S3_NullServers.Sandbox
         bool Roll = false,
         float Wheel = 0f,
         float MouseX = 0f,
-        float MouseY = 0f);
+        float MouseY = 0f
+    );
 }

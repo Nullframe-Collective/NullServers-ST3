@@ -7,16 +7,15 @@ using Il2CppFishNet.Managing.Server;
 using Il2CppFishNet.Object;
 using Il2CppFishNet.Serializing;
 using Il2CppFishNet.Transporting;
-using Il2CppFishNet.Transporting.Relay;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using MelonLoader;
 using MelonLoader.Utils;
-using S3_NullServers.Network;
-using S3_NullServers.Room;
+using NullServers.Network;
+using NullServers.Room;
 using System.Text.Json;
 using UnityEngine;
 
-namespace S3_NullServers.Players
+namespace NullServers.Players
 {
     internal sealed class PlayerProfiles
     {
@@ -36,35 +35,30 @@ namespace S3_NullServers.Players
         private float _nextSubmit;
         private bool _protocolAvailable = true;
 
-        internal PlayerProfile Local { get; private set; } = PlayerProfile.Default;
-
         internal event Action<PlayerProfile> LocalChanged;
-
         internal event Action<NetworkConnection, RoundSignal> RoundSignalReceived;
-
         internal event Action<RoundSignal> RoundSignalReceivedFromServer;
-
         internal event Action<NetworkConnection, ServerMessage> ServerMessageReceived;
-
         internal event Action<ServerMessage> ServerMessageReceivedFromHost;
-
         internal event Action<NetworkConnection, SandboxMessage> SandboxReceived;
-
         internal event Action<SandboxMessage> SandboxReceivedFromHost;
+
+        internal PlayerProfile Local { get; private set; } = PlayerProfile.Default;
 
         internal string DefaultName => _session.Relay?.LocalIdentity?.Username ?? "Player";
 
         private bool Active => _protocolAvailable &&
-            _session.IsNullFrame &&
-            !_session.IsSwitching &&
-            _session.Relay &&
-            _session.Relay.CurrentRoom != null;
+                               _session.IsNullFrame &&
+                               !_session.IsSwitching &&
+                               _session.Relay &&
+                               _session.Relay.CurrentRoom != null;
 
-        internal PlayerProfiles(HarmonyLib.Harmony harmony, RelaySession session, MelonLogger.Instance logger)
+        internal PlayerProfiles(HarmonyLib.Harmony harmony, RelaySession session, MelonLogger.Instance logger = null)
         {
             _instance = this;
             _session = session;
             _logger = logger;
+
             try
             {
                 if (File.Exists(_path))
@@ -78,58 +72,67 @@ namespace S3_NullServers.Players
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
             {
-                logger.Warning($"Cannot load player profile: {exception.Message}");
+                logger?.Warning($"Cannot load player profile: {exception.Message}");
             }
 
             harmony.Patch(
-                AccessTools.Method(typeof(ServerManager), "ParseBroadcast"),
+                AccessTools.Method(typeof(ServerManager), nameof(ServerManager.ParseBroadcast)),
                 prefix: new HarmonyMethod(typeof(PlayerProfiles), nameof(BeforeServerBroadcast)));
+
             harmony.Patch(
-                AccessTools.Method(typeof(ClientManager), "ParseBroadcast"),
+                AccessTools.Method(typeof(ClientManager), nameof(ClientManager.ParseBroadcast)),
                 prefix: new HarmonyMethod(typeof(PlayerProfiles), nameof(BeforeClientBroadcast)));
+
             harmony.Patch(
                 AccessTools.PropertyGetter(typeof(PlayerInfo), nameof(PlayerInfo.HOGIPFLCOLH)),
                 postfix: new HarmonyMethod(typeof(PlayerProfiles), nameof(AfterPlayerName)));
+
             harmony.Patch(
                 AccessTools.Method(typeof(PlayerInfo), nameof(PlayerInfo.OnStartClient)),
                 postfix: new HarmonyMethod(typeof(PlayerProfiles), nameof(AfterPlayerStarted)));
+
             harmony.Patch(
                 AccessTools.PropertyGetter(typeof(PlayerInfo), nameof(PlayerInfo.DDOCMDMFLFE)),
                 postfix: new HarmonyMethod(typeof(PlayerProfiles), nameof(AfterPlayerColor)));
+
             harmony.Patch(
                 AccessTools.PropertyGetter(typeof(PlayerInfo), nameof(PlayerInfo.CDDPPCBBHGL)),
                 postfix: new HarmonyMethod(typeof(PlayerProfiles), nameof(AfterHasPlayerColor)));
+
             harmony.Patch(
                 AccessTools.Method(typeof(MultiplayerChat), nameof(MultiplayerChat.PECNIPKAEPC)),
                 postfix: new HarmonyMethod(typeof(PlayerProfiles), nameof(AfterChatName)));
-            harmony.Patch(
-                AccessTools.Method(
-                    typeof(GUILayout),
-                    nameof(GUILayout.Label),
-                    new[]
-            {
-                    typeof(string),
-                    typeof(GUIStyle),
-                    typeof(Il2CppReferenceArray<GUILayoutOption>)
-                }),
-                prefix: new HarmonyMethod(typeof(PlayerProfiles), nameof(BeforeChatLabel)),
-                finalizer: new HarmonyMethod(typeof(PlayerProfiles), nameof(AfterChatLabel)));
+
             harmony.Patch(
                 AccessTools.Method(typeof(DrawPlayerName), nameof(DrawPlayerName.OnGUI)),
                 prefix: new HarmonyMethod(typeof(PlayerProfiles), nameof(BeforeDrawName)));
+
+            harmony.Patch
+            (
+                AccessTools.Method
+                (
+                    typeof(GUILayout),
+                    nameof(GUILayout.Label),
+                    [
+                        typeof(string),
+                        typeof(GUIStyle),
+                        typeof(Il2CppReferenceArray<GUILayoutOption>)
+                    ]
+                ),
+                prefix: new HarmonyMethod(typeof(PlayerProfiles), nameof(BeforeChatLabel)),
+                finalizer: new HarmonyMethod(typeof(PlayerProfiles), nameof(AfterChatLabel))
+            );
         }
 
         internal void Save(string nickname, string colorHex)
         {
             PlayerProfile profile = PlayerProfile.Normalize(nickname, colorHex);
-            if (profile.Matches(Local))
-            {
-                return;
-            }
+            if (profile.Matches(Local)) return;
 
             Local = profile;
             LocalChanged?.Invoke(profile);
             _nextSubmit = 0f;
+
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(_path));
@@ -137,7 +140,7 @@ namespace S3_NullServers.Players
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                _logger.Warning($"Cannot save player profile: {exception.Message}");
+                _logger?.Warning($"Cannot save player profile: {exception.Message}");
             }
         }
 
@@ -149,12 +152,10 @@ namespace S3_NullServers.Players
 
         internal void Update()
         {
-            if (Time.unscaledTime < _nextUpdate)
-            {
-                return;
-            }
+            if (Time.unscaledTime < _nextUpdate) return;
 
             _nextUpdate = Time.unscaledTime + 0.25f;
+
             foreach (IntPtr key in _playerProfiles.Where(pair => !pair.Value.Player).Select(pair => pair.Key).ToArray())
             {
                 _playerProfiles.Remove(key);
@@ -163,11 +164,9 @@ namespace S3_NullServers.Players
             NetBootstrap bootstrap = NetBootstrap.GJDGDIGECJN;
             NetworkManager manager = bootstrap ? bootstrap.HLNKMGIBPIG : null;
             SetConnection(manager);
+
             int clientId = _localId;
-            if (clientId < 0)
-            {
-                return;
-            }
+            if (clientId < 0) return;
 
             if (manager.ServerManager.Started)
             {
@@ -178,14 +177,17 @@ namespace S3_NullServers.Players
                         _serverProfiles.Remove(id);
                         _lastSubmission.Remove(id);
                         _forcedNames.Remove(id);
-                        Send(new ProfilePacket(1, ProfilePacketKind.Remove, new[] { new ProfileEntry(id, null) }));
+                        Send(new ProfilePacket(1, ProfilePacketKind.Remove, [new ProfileEntry(id, null)]));
                     }
                 }
             }
 
-            PlayerProfile local = PlayerProfile.Normalize(
+            PlayerProfile local = PlayerProfile.Normalize
+            (
                 string.IsNullOrWhiteSpace(Local.Nickname) ? DefaultName : Local.Nickname,
-                Local.ColorHex);
+                Local.ColorHex
+            );
+
             if (Time.unscaledTime >= _nextSubmit &&
                 (!_profiles.TryGetValue(clientId, out var confirmed) ||
                 !local.Matches(confirmed)))
@@ -199,7 +201,8 @@ namespace S3_NullServers.Players
         {
             if (manager && manager != _manager)
             {
-                _protocolAvailable = !manager.ClientManager._broadcastHandlers.ContainsKey(ProfilePacket.BroadcastId) &&
+                _protocolAvailable = 
+                    !manager.ClientManager._broadcastHandlers.ContainsKey(ProfilePacket.BroadcastId) &&
                     !manager.ServerManager._broadcastHandlers.ContainsKey(ProfilePacket.BroadcastId) &&
                     !manager.ClientManager._broadcastHandlers.ContainsKey(RoundSignal.BroadcastId) &&
                     !manager.ServerManager._broadcastHandlers.ContainsKey(RoundSignal.BroadcastId) &&
@@ -207,20 +210,24 @@ namespace S3_NullServers.Players
                     !manager.ServerManager._broadcastHandlers.ContainsKey(ServerMessage.BroadcastId) &&
                     !manager.ClientManager._broadcastHandlers.ContainsKey(SandboxMessage.BroadcastId) &&
                     !manager.ServerManager._broadcastHandlers.ContainsKey(SandboxMessage.BroadcastId);
+
                 if (!_protocolAvailable)
                 {
-                    _logger.Error("Player profile message identifier is already registered by another component.");
+                    _logger?.Error("Player profile message identifier is already registered by another component.");
                 }
             }
 
             NetworkConnection connection = manager ? manager.ClientManager.Connection : null;
             string roomId = Active ? _session.Relay.CurrentRoom.Id : null;
-            int clientId = roomId != null &&
+
+            int clientId = 
+                roomId != null &&
                 manager &&
                 manager.ClientManager.Started &&
                 connection != null &&
                 connection.IsAuthenticated
                 ? connection.ClientId : -1;
+
             if (roomId != _roomId || (_localId >= 0 && clientId != _localId) || manager != _manager)
             {
                 _profiles.Clear();
@@ -243,13 +250,18 @@ namespace S3_NullServers.Players
         {
             if (Active && _manager && _manager.ServerManager.Started)
             {
-                Send(new ProfilePacket(
+                Send
+                (
+                    new ProfilePacket
+                    (
                         1,
                         ProfilePacketKind.Snapshot,
                         _serverProfiles
-                    .Where(pair => _manager.ServerManager.Clients.TryGetValue(pair.Key, out var connection) &&
-                    connection.IsAuthenticated)
-                    .Select(pair => new ProfileEntry(pair.Key, pair.Value)).ToArray()));
+                        .Where(pair => _manager.ServerManager.Clients.TryGetValue(pair.Key, out var connection) &&
+                        connection.IsAuthenticated)
+                        .Select(pair => new ProfileEntry(pair.Key, pair.Value)).ToArray()
+                    )
+                );
             }
         }
 
@@ -263,18 +275,22 @@ namespace S3_NullServers.Players
             SendPacket(ServerMessage.BroadcastId, JsonSerializer.Serialize(message), target, toServer);
         }
 
-        internal void SendSandbox(
+        internal void SendSandbox
+        (
             SandboxMessage message,
             NetworkConnection target = null,
             bool toServer = false,
-            Channel channel = Channel.Reliable)
+            Channel channel = Channel.Reliable
+        )
         {
-            SendPacket(
+            SendPacket
+            (
                 SandboxMessage.BroadcastId,
                 JsonSerializer.Serialize(message, SandboxMessage.JsonOptions),
                 target,
                 toServer,
-                channel);
+                channel
+            );
         }
 
         internal void ForceNickname(int id, string name)
@@ -288,30 +304,27 @@ namespace S3_NullServers.Players
                 _forcedNames[id] = (identity.Username, PlayerProfile.Normalize(name, "#FFFFFF").Nickname);
             }
 
-            if (!_serverProfiles.TryGetValue(id, out var profile) || name == null)
-            {
-                return;
-            }
+            if (!_serverProfiles.TryGetValue(id, out var profile) || name == null) return;
 
             _serverProfiles[id] = PlayerProfile.Normalize(name, profile.ColorHex);
             RememberPlayers();
             Synchronize();
         }
 
-        private void SendPacket(
+        private void SendPacket
+        (
             ushort messageId,
             string json,
             NetworkConnection target,
             bool toServer,
-            Channel channel = Channel.Reliable)
+            Channel channel = Channel.Reliable
+        )
         {
-            if (!_manager)
-            {
-                return;
-            }
+            if (!_manager) return;
 
             PooledWriter body = WriterPool.Retrieve();
             PooledWriter writer = WriterPool.Retrieve();
+
             try
             {
                 body.WriteString(json);
@@ -319,30 +332,34 @@ namespace S3_NullServers.Players
                 writer.WriteUInt16(messageId);
                 writer.WriteInt32(body.Length);
                 writer.WriteArraySegment(body.GetArraySegment());
+
                 if (toServer)
                 {
                     _manager.TransportManager.SendToServer((byte)channel, writer.GetArraySegment(), DataOrderType.Default);
                 }
                 else if (target != null)
                 {
-                    _manager.TransportManager.SendToClient(
+                    _manager.TransportManager.SendToClient
+                    (
                         (byte)channel,
                         writer.GetArraySegment(),
                         target,
-                        DataOrderType.Default);
+                        DataOrderType.Default
+                    );
                 }
                 else
                 {
                     foreach (NetworkConnection client in _manager.ServerManager.Clients.Values)
                     {
-                        if (client.IsAuthenticated)
-                        {
-                            _manager.TransportManager.SendToClient(
-                                (byte)channel,
-                                writer.GetArraySegment(),
-                                client,
-                                DataOrderType.Default);
-                        }
+                        if (!client.IsAuthenticated) continue;
+
+                        _manager.TransportManager.SendToClient
+                        (
+                            (byte)channel,
+                            writer.GetArraySegment(),
+                            client,
+                            DataOrderType.Default
+                        );
                     }
                 }
             }
@@ -356,27 +373,28 @@ namespace S3_NullServers.Players
         private static bool Read(PooledReader reader, out ProfilePacket packet)
         {
             packet = null;
+
             if (!ReadJson(reader, ProfilePacket.BroadcastId, ProfilePacket.MaxBytes, out var json))
             {
                 return false;
             }
 
             ProfilePacket.TryParse(json, out packet);
+
             return true;
         }
 
         private static bool ReadJson(PooledReader reader, ushort messageId, int maxBytes, out string json)
         {
             json = null;
-            if (reader.Remaining < 2)
-            {
-                return false;
-            }
+
+            if (reader.Remaining < 2) return false;
 
             int position = reader.Position;
             if (reader.ReadUInt16() != messageId)
             {
                 reader.Position = position;
+
                 return false;
             }
 
@@ -386,6 +404,7 @@ namespace S3_NullServers.Players
                 if (length < 1 || length > maxBytes || length > reader.Remaining)
                 {
                     reader.Skip(reader.Remaining);
+
                     return true;
                 }
 
@@ -407,71 +426,78 @@ namespace S3_NullServers.Players
                     reader.Skip(reader.Remaining);
                 }
 
-                _instance._logger.Warning($"Invalid player profile packet: {exception.Message}");
+                _instance._logger?.Warning($"Invalid player profile packet: {exception.Message}");
             }
 
             return true;
         }
 
-        private static bool BeforeServerBroadcast(ServerManager __instance, PooledReader __0, NetworkConnection __1, Channel __2)
+        private static bool BeforeServerBroadcast
+        (
+            ServerManager __instance, 
+            PooledReader reader, 
+            NetworkConnection conn, 
+            Channel channel
+        )
         {
             PlayerProfiles instance = _instance;
-            if (instance.Active && ReadJson(__0, SandboxMessage.BroadcastId, SandboxMessage.MaxBytes, out var sandboxJson))
+            if (instance.Active && ReadJson(reader, SandboxMessage.BroadcastId, SandboxMessage.MaxBytes, out var sandboxJson))
             {
-                if (__1 != null &&
-                    __1.IsAuthenticated &&
+                if 
+                (
+                    conn != null &&
+                    conn.IsAuthenticated &&
                     SandboxMessage.TryParse(sandboxJson, out var sandbox) &&
-                    (__2 == Channel.Reliable || sandbox.Kind == SandboxKind.GunAim))
+                    (channel == Channel.Reliable || sandbox.Kind == SandboxKind.GunAim)
+                )
                 {
-                    instance.SandboxReceived?.Invoke(__1, sandbox);
+                    instance.SandboxReceived?.Invoke(conn, sandbox);
                 }
 
                 return false;
             }
 
-            if (__2 == Channel.Reliable &&
+            if 
+            (
+                channel == Channel.Reliable &&
                 instance.Active &&
-                ReadJson(
-                __0,
-                ServerMessage.BroadcastId,
-                ServerMessage.MaxBytes,
-                out var controlJson))
+                ReadJson(reader, ServerMessage.BroadcastId, ServerMessage.MaxBytes, out var controlJson)
+            )
             {
-                if (__1 != null && __1.IsAuthenticated && ServerMessage.TryParse(controlJson, out var message))
+                if (conn != null && conn.IsAuthenticated && ServerMessage.TryParse(controlJson, out var message))
                 {
-                    instance.ServerMessageReceived?.Invoke(__1, message);
+                    instance.ServerMessageReceived?.Invoke(conn, message);
                 }
 
                 return false;
             }
 
-            if (__2 == Channel.Reliable &&
+            if 
+            (
+                channel == Channel.Reliable &&
                 instance.Active &&
-                ReadJson(
-                __0,
-                RoundSignal.BroadcastId,
-                RoundSignal.MaxBytes,
-                out var json))
+                ReadJson(reader, RoundSignal.BroadcastId, RoundSignal.MaxBytes, out var json)
+            )
             {
-                if (__1 != null && __1.IsAuthenticated && RoundSignal.TryParse(json, out var signal))
+                if (conn != null && conn.IsAuthenticated && RoundSignal.TryParse(json, out var signal))
                 {
-                    instance.RoundSignalReceived?.Invoke(__1, signal);
+                    instance.RoundSignalReceived?.Invoke(conn, signal);
                 }
 
                 return false;
             }
 
-            if (__2 != Channel.Reliable || !instance.Active || !Read(__0, out var packet))
+            if (channel != Channel.Reliable || !instance.Active || !Read(reader, out var packet))
             {
                 return true;
             }
 
-            if (packet == null || __1 == null || !__1.IsAuthenticated || packet.Kind != ProfilePacketKind.Profile)
+            if (packet == null || conn == null || !conn.IsAuthenticated || packet.Kind != ProfilePacketKind.Profile)
             {
                 return false;
             }
 
-            int id = __1.ClientId;
+            int id = conn.ClientId;
             if (instance._lastSubmission.TryGetValue(id, out var last) && Time.unscaledTime - last < 0.5f)
             {
                 return false;
@@ -480,6 +506,7 @@ namespace S3_NullServers.Players
             instance.SetConnection(__instance.NetworkManager);
             instance._lastSubmission[id] = Time.unscaledTime;
             PlayerProfile profile = packet.Players[0].Profile;
+
             if (instance._forcedNames.TryGetValue(id, out var forced))
             {
                 if (instance._session.Relay.TryGetPlayerIdentity(id, out var identity) && identity.Username == forced.Account)
@@ -494,26 +521,35 @@ namespace S3_NullServers.Players
 
             instance._serverProfiles[id] = profile;
             instance.RememberPlayers();
-            instance.Send(
-                new ProfilePacket(
+            instance.Send
+            (
+                new ProfilePacket
+                (
                     1,
                     ProfilePacketKind.Snapshot,
                     instance._serverProfiles.Where(pair => __instance.Clients.ContainsKey(pair.Key))
-                    .Select(pair => new ProfileEntry(pair.Key, pair.Value)).ToArray()),
-                __1);
+                    .Select(pair => new ProfileEntry(pair.Key, pair.Value)).ToArray()
+                ),
+                conn
+            );
+
             instance.Send(ProfilePacket.Update(id, profile));
-            instance._logger.Msg($"Player profile accepted. Client: {id}; Nickname: {profile.Nickname}; Color: {profile.ColorHex}.");
+            instance._logger?.Msg($"Player profile accepted. Client: {id}; Nickname: {profile.Nickname}; Color: {profile.ColorHex}.");
+
             return false;
         }
 
-        private static bool BeforeClientBroadcast(ClientManager __instance, PooledReader __0, Channel __1)
+        private static bool BeforeClientBroadcast(ClientManager __instance, PooledReader reader, Channel channel)
         {
             PlayerProfiles instance = _instance;
-            if (instance.Active && ReadJson(__0, SandboxMessage.BroadcastId, SandboxMessage.MaxBytes, out var sandboxJson))
+            if (instance.Active && ReadJson(reader, SandboxMessage.BroadcastId, SandboxMessage.MaxBytes, out var sandboxJson))
             {
-                if (SandboxMessage.TryParse(sandboxJson, out var sandbox) &&
-                    (__1 == Channel.Reliable ||
-                    sandbox.Kind is SandboxKind.Pose or SandboxKind.PoseBatch or SandboxKind.GunState))
+                if
+                (
+                    SandboxMessage.TryParse(sandboxJson, out var sandbox) &&
+                    (channel == Channel.Reliable ||
+                    sandbox.Kind is SandboxKind.Pose or SandboxKind.PoseBatch or SandboxKind.GunState)
+                )
                 {
                     instance.SandboxReceivedFromHost?.Invoke(sandbox);
                 }
@@ -521,13 +557,12 @@ namespace S3_NullServers.Players
                 return false;
             }
 
-            if (__1 == Channel.Reliable &&
+            if 
+            (
+                channel == Channel.Reliable &&
                 instance.Active &&
-                ReadJson(
-                __0,
-                ServerMessage.BroadcastId,
-                ServerMessage.MaxBytes,
-                out var controlJson))
+                ReadJson(reader, ServerMessage.BroadcastId, ServerMessage.MaxBytes, out var controlJson)
+            )
             {
                 if (ServerMessage.TryParse(controlJson, out var message))
                 {
@@ -537,13 +572,11 @@ namespace S3_NullServers.Players
                 return false;
             }
 
-            if (__1 == Channel.Reliable &&
+            if 
+            (
+                channel == Channel.Reliable &&
                 instance.Active &&
-                ReadJson(
-                __0,
-                RoundSignal.BroadcastId,
-                RoundSignal.MaxBytes,
-                out var json))
+                ReadJson(reader, RoundSignal.BroadcastId, RoundSignal.MaxBytes, out var json))
             {
                 if (RoundSignal.TryParse(json, out var signal))
                 {
@@ -553,17 +586,15 @@ namespace S3_NullServers.Players
                 return false;
             }
 
-            if (__1 != Channel.Reliable || !instance.Active || !Read(__0, out var packet))
+            if (channel != Channel.Reliable || !instance.Active || !Read(reader, out var packet))
             {
                 return true;
             }
 
-            if (packet == null)
-            {
-                return false;
-            }
+            if (packet == null) return false;
 
             instance.SetConnection(__instance.NetworkManager);
+
             PlayerProfile previous = instance._profiles.GetValueOrDefault(instance._localId);
             if (packet.Kind == ProfilePacketKind.Snapshot)
             {
@@ -585,7 +616,7 @@ namespace S3_NullServers.Players
             instance.RememberPlayers();
             if (instance._profiles.TryGetValue(instance._localId, out var local) && !local.Matches(previous))
             {
-                instance._logger.Msg($"Player profile synchronized. Client: {instance._localId}; Nickname: {local.Nickname}; Color: {local.ColorHex}.");
+                instance._logger?.Msg($"Player profile synchronized. Client: {instance._localId}; Nickname: {local.Nickname}; Color: {local.ColorHex}.");
             }
 
             return false;
@@ -593,56 +624,55 @@ namespace S3_NullServers.Players
 
         private static void AfterPlayerName(PlayerInfo __instance, ref string __result)
         {
-            if (_instance.TryPlayerProfile(__instance, out var profile))
-            {
-                __result = profile.Nickname;
-            }
+            if (!_instance.TryPlayerProfile(__instance, out var profile)) return;
+
+            __result = profile.Nickname;
         }
 
         private void RememberPlayers()
         {
             foreach (PlayerInfo player in UnityEngine.Object.FindObjectsOfType<PlayerInfo>())
             {
-                if (_serverProfiles.TryGetValue(player.COJDPMKCLCM, out var profile) ||
-                    _profiles.TryGetValue(player.COJDPMKCLCM, out profile))
+                if (!_serverProfiles.TryGetValue(player.COJDPMKCLCM, out var profile) ||
+                    !_profiles.TryGetValue(player.COJDPMKCLCM, out profile))
                 {
-                    _playerProfiles[player.Pointer] = (player, profile);
+                    continue;
                 }
+
+                _playerProfiles[player.Pointer] = (player, profile);
             }
         }
 
         private bool TryPlayerProfile(PlayerInfo player, out PlayerProfile profile)
         {
             profile = null;
+
             if (_session.IsNullFrame && !_session.IsSwitching && _playerProfiles.TryGetValue(player.Pointer, out var cached))
             {
                 profile = cached.Profile;
+
                 return true;
             }
 
-            if (!TryGet(player.COJDPMKCLCM, out profile))
-            {
-                return false;
-            }
+            if (!TryGet(player.COJDPMKCLCM, out profile)) return false;
 
             _playerProfiles[player.Pointer] = (player, profile);
+
             return true;
         }
 
         private static void AfterPlayerStarted(PlayerInfo __instance)
         {
-            if (_instance.TryGet(__instance.COJDPMKCLCM, out var profile))
-            {
-                _instance._playerProfiles[__instance.Pointer] = (__instance, profile);
-            }
+            if (!_instance.TryGet(__instance.COJDPMKCLCM, out var profile)) return;
+
+            _instance._playerProfiles[__instance.Pointer] = (__instance, profile);
         }
 
         private static void AfterPlayerColor(PlayerInfo __instance, ref Color __result)
         {
-            if (_instance.TryPlayerProfile(__instance, out var profile))
-            {
-                ColorUtility.TryParseHtmlString(profile.ColorHex, out __result);
-            }
+            if (!_instance.TryPlayerProfile(__instance, out var profile)) return;
+
+            ColorUtility.TryParseHtmlString(profile.ColorHex, out __result);
         }
 
         private static void AfterHasPlayerColor(PlayerInfo __instance, ref bool __result)
@@ -667,40 +697,48 @@ namespace S3_NullServers.Players
             const string suffix = "</color>: ";
             const int colorLength = 7;
             int nameStart = prefix.Length + colorLength + 1;
+
             __state = null;
-            if (__0 == null ||
+
+            if 
+            (
+                __0 == null ||
                 __0.Length <= nameStart + suffix.Length ||
                 !__0.StartsWith(prefix, StringComparison.Ordinal) ||
                 __0[prefix.Length] != '#' ||
                 __0[nameStart - 1] != '>' ||
                 !__0.EndsWith(suffix, StringComparison.Ordinal) ||
                 !_instance.Active ||
-                __1 == null)
+                __1 == null
+            )
             {
                 return;
             }
 
             MultiplayerChat chat = MultiplayerChat.CFNPNLGIHMH;
-            if (!chat ||
+            if 
+            (
+                !chat ||
                 chat.JELNPHBIKHK == null ||
                 __1.Pointer != chat.JELNPHBIKHK.Pointer ||
-                !ColorUtility.TryParseHtmlString(__0.Substring(prefix.Length, colorLength), out var color))
+                !ColorUtility.TryParseHtmlString(__0.Substring(prefix.Length, colorLength), out var color)
+            )
             {
                 return;
             }
 
             // The native style is shared with the input and message body, which must keep treating tags as text.
-            __0 = "  " + __0.Substring(nameStart, __0.Length - nameStart - suffix.Length) + ": ";
+            __0 = string.Concat("  ", __0.AsSpan(nameStart, __0.Length - nameStart - suffix.Length), ": ");
             __state = GUI.color;
+
             GUI.color = color;
         }
 
         private static void AfterChatLabel(Color? __state)
         {
-            if (__state.HasValue)
-            {
-                GUI.color = __state.Value;
-            }
+            if (!__state.HasValue) return;
+
+            GUI.color = __state.Value;
         }
 
         private static void BeforeDrawName(DrawPlayerName __instance)
@@ -711,7 +749,8 @@ namespace S3_NullServers.Players
                 __instance.DJHKBCAIADF = profile.Nickname;
                 controller.DJHKBCAIADF = profile.Nickname;
                 controller.AJGABBOMGJB = true;
-                ColorUtility.TryParseHtmlString(profile.ColorHex, out var color);
+
+                ColorUtility.TryParseHtmlString(profile.ColorHex, out Color color);
                 controller.NDHICLFEEKL = color;
             }
         }

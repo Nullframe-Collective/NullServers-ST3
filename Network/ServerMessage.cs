@@ -1,9 +1,9 @@
-using S3_NullServers.Room;
-using S3_NullServers.Server;
+using NullServers.Room;
+using NullServers.Server;
 using System.Text;
 using System.Text.Json;
 
-namespace S3_NullServers.Network
+namespace NullServers.Network
 {
     internal enum ServerAction
     {
@@ -17,7 +17,8 @@ namespace S3_NullServers.Network
         Unmute
     }
 
-    internal sealed record ServerRequest(
+    internal sealed record ServerRequest
+    (
         ServerAction Action,
         int PlayerId = -1,
         string Account = null,
@@ -29,18 +30,21 @@ namespace S3_NullServers.Network
         int Minutes = 0,
         int Custards = 0,
         int Difficulty = 0,
-        bool MuteGuests = false);
+        bool MuteGuests = false
+    );
 
     internal sealed record RoomPlayer(int Id, string Account, string Nickname, bool Guest, bool Trusted, bool Muted);
 
     internal sealed record ServerState(bool Trusted, RoomPlayer[] Players, BanEntry[] Bans, BanEntry[] Mutes);
 
-    internal sealed record ServerMessage(
+    internal sealed record ServerMessage
+    (
         int Version,
         string RoomId,
         ServerRequest Request = null,
         ServerState State = null,
-        string Notice = null)
+        string Notice = null
+    )
     {
         internal const ushort BroadcastId = 0x4E48;
         internal const int MaxBytes = 131072;
@@ -56,33 +60,38 @@ namespace S3_NullServers.Network
             try
             {
                 ServerMessage value = JsonSerializer.Deserialize<ServerMessage>(json);
-                if (value == null ||
+                if 
+                (
+                    value == null ||
                     value.Version != 1 ||
                     string.IsNullOrEmpty(value.RoomId) ||
                     value.RoomId.Length > 64 ||
-                    (value.Request != null ? 1 : 0) + (value.State != null ? 1 : 0) + (value.Notice != null ? 1 : 0) != 1)
+                    (value.Request != null ? 1 : 0) + (value.State != null ? 1 : 0) + (value.Notice != null ? 1 : 0) != 1
+                )
                 {
                     return false;
                 }
 
-                if (value.Request is { } request &&
+                if 
+                (
+                    value.Request is { } request &&
                     (!Enum.IsDefined(typeof(ServerAction), request.Action) ||
                     request.PlayerId < -1 ||
                     request.Account?.Length > 256 ||
                     request.Name?.Length > RoomName.MaxDisplayBytes ||
                     request.Color?.Length > 7 ||
                     request.Scene?.Length > 128 ||
-                    request.Mode?.Length > 32))
+                    request.Mode?.Length > 32)
+                )
                 {
                     return false;
                 }
 
-                if (value.Notice?.Length > 512)
-                {
-                    return false;
-                }
+                if (value.Notice?.Length > 512) return false;
 
-                if (value.State is { } state &&
+                if 
+                (
+                    value.State is { } state &&
                     (state.Players == null ||
                     state.Bans == null ||
                     state.Mutes == null ||
@@ -98,12 +107,14 @@ namespace S3_NullServers.Network
                     state.Players.Select(player => player.Id).Distinct().Count() != state.Players.Length ||
                     state.Bans.Concat(state.Mutes).Any(entry => entry == null ||
                     string.IsNullOrWhiteSpace(entry.Account) ||
-                    entry.Account.Length > 256)))
+                    entry.Account.Length > 256))
+                )
                 {
                     return false;
                 }
 
                 message = value;
+
                 return true;
             }
             catch (JsonException)

@@ -1,20 +1,14 @@
-using S3_NullServers.Room;
+using NullServers.Room;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
 
-namespace S3_NullServers.Players
+namespace NullServers.Players
 {
     internal sealed class PlayerProfile
     {
-        public string Nickname
-        {
-            get;
-        }
-        public string ColorHex
-        {
-            get;
-        }
+        public string Nickname { get; }
+        public string ColorHex { get; }
 
         public PlayerProfile(string nickname, string colorHex)
         {
@@ -31,6 +25,7 @@ namespace S3_NullServers.Players
         {
             StringBuilder text = new();
             int count = 0;
+
             foreach (Rune rune in (nickname ?? "").Trim().EnumerateRunes())
             {
                 if (Rune.IsControl(rune) || Rune.GetUnicodeCategory(rune) == UnicodeCategory.Format)
@@ -38,10 +33,7 @@ namespace S3_NullServers.Players
                     continue;
                 }
 
-                if (count++ == NameLimit)
-                {
-                    break;
-                }
+                if (count++ == NameLimit) break;
 
                 text.Append(rune.Value switch
 
@@ -53,14 +45,17 @@ namespace S3_NullServers.Players
                 });
             }
 
-            return new PlayerProfile(
+            return new PlayerProfile
+            (
                 text.ToString().Trim(),
-                RoomOptions.IsValidColor(colorHex) ? colorHex.ToUpperInvariant() : "#FFFFFF");
+                RoomOptions.IsValidColor(colorHex) ? colorHex.ToUpperInvariant() : "#FFFFFF"
+            );
         }
 
         internal bool Matches(PlayerProfile other) => other != null && Nickname == other.Nickname && ColorHex == other.ColorHex;
 
-        internal bool IsValid => Nickname != null &&
+        internal bool IsValid => 
+            Nickname != null &&
             Nickname.Length > 0 &&
             RoomOptions.IsValidColor(ColorHex) &&
             Matches(Normalize(Nickname, ColorHex));
@@ -73,52 +68,24 @@ namespace S3_NullServers.Players
         Remove
     }
 
-    internal sealed class ProfileEntry
+    internal sealed class ProfileEntry(int clientId, PlayerProfile profile)
     {
-        public int ClientId
-        {
-            get;
-        }
-        public PlayerProfile Profile
-        {
-            get;
-        }
-
-        public ProfileEntry(int clientId, PlayerProfile profile)
-        {
-            ClientId = clientId;
-            Profile = profile;
-        }
+        public int ClientId { get; } = clientId;
+        public PlayerProfile Profile { get; } = profile;
     }
 
-    internal sealed class ProfilePacket
+    internal sealed class ProfilePacket(int version, ProfilePacketKind kind, ProfileEntry[] players)
     {
-        public int Version
-        {
-            get;
-        }
-        public ProfilePacketKind Kind
-        {
-            get;
-        }
-        public ProfileEntry[] Players
-        {
-            get;
-        }
-
-        public ProfilePacket(int version, ProfilePacketKind kind, ProfileEntry[] players)
-        {
-            Version = version;
-            Kind = kind;
-            Players = players;
-        }
+        public int Version { get; } = version;
+        public ProfilePacketKind Kind { get; } = kind;
+        public ProfileEntry[] Players { get; } = players;
 
         internal const ushort BroadcastId = 0x4E46;
         internal const int MaxBytes = 32768;
 
         internal static ProfilePacket Update(int clientId, PlayerProfile profile)
         {
-            return new(1, ProfilePacketKind.Profile, new[] { new ProfileEntry(clientId, profile) });
+            return new(1, ProfilePacketKind.Profile, [new ProfileEntry(clientId, profile)]);
         }
 
         internal string Serialize() => JsonSerializer.Serialize(this);
@@ -126,6 +93,7 @@ namespace S3_NullServers.Players
         internal static bool TryParse(string json, out ProfilePacket packet)
         {
             packet = null;
+
             if (string.IsNullOrEmpty(json) || Encoding.UTF8.GetByteCount(json) > MaxBytes)
             {
                 return false;
@@ -134,12 +102,15 @@ namespace S3_NullServers.Players
             try
             {
                 ProfilePacket value = JsonSerializer.Deserialize<ProfilePacket>(json);
-                if (value == null ||
+                if 
+                (
+                    value == null ||
                     value.Version != 1 ||
                     value.Players == null ||
                     value.Players.Length > RoomOptions.PlayerLimit ||
                     !Enum.IsDefined(typeof(ProfilePacketKind), value.Kind) ||
-                    (value.Kind != ProfilePacketKind.Snapshot && value.Players.Length != 1))
+                    (value.Kind != ProfilePacketKind.Snapshot && value.Players.Length != 1)
+                )
                 {
                     return false;
                 }
@@ -147,16 +118,20 @@ namespace S3_NullServers.Players
                 HashSet<int> ids = new();
                 foreach (ProfileEntry entry in value.Players)
                 {
-                    if (entry == null ||
+                    if 
+                    (
+                        entry == null ||
                         entry.ClientId < 0 ||
                         !ids.Add(entry.ClientId) ||
-                        (value.Kind != ProfilePacketKind.Remove && (entry.Profile == null || !entry.Profile.IsValid)))
+                        (value.Kind != ProfilePacketKind.Remove && (entry.Profile == null || !entry.Profile.IsValid))
+                    )
                     {
                         return false;
                     }
                 }
 
                 packet = value;
+
                 return true;
             }
             catch (JsonException)

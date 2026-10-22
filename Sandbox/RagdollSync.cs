@@ -2,11 +2,11 @@ using HarmonyLib;
 using Il2Cpp;
 using Il2CppFishNet.Connection;
 using Il2CppInterop.Runtime;
-using S3_NullServers.Network;
+using NullServers.Network;
 using UnityEngine;
 using Object = UnityEngine.Object;
 
-namespace S3_NullServers.Sandbox
+namespace NullServers.Sandbox
 {
     internal sealed class RagdollSync
     {
@@ -40,9 +40,11 @@ namespace S3_NullServers.Sandbox
         {
             _instance = this;
             _world = world;
+
             harmony.Patch(
                 AccessTools.Method(typeof(RagdollController), nameof(RagdollController.Awake)),
                 postfix: new HarmonyMethod(typeof(RagdollSync), nameof(Created)));
+
             harmony.Patch(
                 AccessTools.Method(typeof(PlayerDamage), nameof(PlayerDamage.KDDDGBFEFOC)),
                 prefix: new HarmonyMethod(typeof(RagdollSync), nameof(BeforeDeath)),
@@ -82,26 +84,24 @@ namespace S3_NullServers.Sandbox
 
         internal void Register(GameObject root)
         {
-            if (!root || !root.scene.IsValid() || _local.ContainsKey(root.Pointer))
-            {
-                return;
-            }
+            if (!root || !root.scene.IsValid() || _local.ContainsKey(root.Pointer)) return;
 
             Rigidbody[] physics = root.GetComponentsInChildren<Rigidbody>(true).ToArray();
-            if (physics.Length is < 2 or > 64)
-            {
-                return;
-            }
+            if (physics.Length is < 2 or > 64) return;
 
             _local[root.Pointer] = root;
             _players[root.Pointer] = _sourcePlayer;
+
             if (!_world.IsHost)
             {
-                foreach (Body copy in _bodies.Values.Where(body => body.Copy &&
+                foreach 
+                (
+                    Body copy in _bodies.Values.Where(body => body.Copy &&
                     body.Root &&
                     body.Definition.Name == root.name.Replace("(Clone)", "").Trim() &&
                     (body.Definition.Player < 0 || body.Definition.Player == _sourcePlayer) &&
-                    Vector3.Distance(root.transform.position, SandboxWorld.Vector(body.Definition.Position)) < 8f))
+                    Vector3.Distance(root.transform.position, SandboxWorld.Vector(body.Definition.Position)) < 8f)
+                )
                 {
                     _bound.Remove(copy.Root.Pointer);
                     Object.Destroy(copy.Root);
@@ -114,20 +114,24 @@ namespace S3_NullServers.Sandbox
             }
 
             string[] paths = physics.Select(body => Path(root.transform, body.transform)).ToArray();
-            RagdollDefinition definition = new(
+
+            RagdollDefinition definition = new
+            (
                 _nextId++,
                 root.name.Replace("(Clone)", "").Trim(),
                 SandboxWorld.Point(root.transform.position),
                 paths,
-                _sourcePlayer);
-            Body state = new()
+                _sourcePlayer
+            );
 
+            Body state = new()
             {
                 Definition = definition,
                 Root = root,
                 Physics = physics,
                 Bones = physics.Select(body => body.transform).ToArray()
             };
+
             _bodies[definition.Id] = state;
             _world.Send(_world.Message(SandboxKind.Ragdoll) with
             {
@@ -163,14 +167,21 @@ namespace S3_NullServers.Sandbox
                 {
                     Ragdoll = body.Definition
                 }, connection);
+
                 for (int offset = 0; offset < body.Bones.Length; offset += PhysicsPacket.MaxPoses)
                 {
-                    PhysicsPose[] poses = body.Bones.Skip(offset).Take(PhysicsPacket.MaxPoses).Select((bone, index) =>
-                        new PhysicsPose(
+                    PhysicsPose[] poses = body.Bones.Skip(offset).Take(PhysicsPacket.MaxPoses).Select
+                    (
+                        (bone, index) =>
+                        new PhysicsPose
+                        (
                             body.Definition.Id,
                             (byte)(offset + index),
                             SandboxWorld.Point(bone.position),
-                            SandboxWorld.Rotation(bone.rotation))).ToArray();
+                            SandboxWorld.Rotation(bone.rotation)
+                        )
+                    ).ToArray();
+
                     _world.Queue(_world.Message(SandboxKind.PoseBatch) with
                     {
                         Sequence = 1,
@@ -190,15 +201,13 @@ namespace S3_NullServers.Sandbox
             }
 
             indices.Reverse();
+
             return string.Join("/", indices);
         }
 
         private static Transform Resolve(Transform root, string path)
         {
-            if (path.Length == 0)
-            {
-                return root;
-            }
+            if (path.Length == 0) return root;
 
             foreach (string part in path.Split('/'))
             {
@@ -216,26 +225,24 @@ namespace S3_NullServers.Sandbox
         private bool Bind(Body body)
         {
             RagdollDefinition definition = body.Definition;
-            GameObject root = _local.Values.Where(value => value &&
+            GameObject root = 
+                _local.Values.Where(value => value &&
                 !_bound.Contains(value.Pointer) &&
                 value.name.Replace("(Clone)", "").Trim() == definition.Name &&
                 (definition.Player < 0 || _players.GetValueOrDefault(value.Pointer, -1) == definition.Player) &&
                 Vector3.Distance(value.transform.position, SandboxWorld.Vector(definition.Position)) < 8f)
                 .OrderBy(value => Vector3.Distance(value.transform.position, SandboxWorld.Vector(definition.Position))).FirstOrDefault();
+
             if (!root)
             {
-                if (Time.unscaledTime - body.CreatedAt < 1f)
-                {
-                    return false;
-                }
+                if (Time.unscaledTime - body.CreatedAt < 1f) return false;
 
-                GameObject prefab = Resources.FindObjectsOfTypeAll<GameObject>().FirstOrDefault(value => !value.scene.IsValid() &&
+                GameObject prefab = 
+                    Resources.FindObjectsOfTypeAll<GameObject>().FirstOrDefault(value => !value.scene.IsValid() &&
                     value.name == definition.Name &&
                     value.GetComponentInChildren(Il2CppType.Of<RagdollController>(), true));
-                if (!prefab)
-                {
-                    return false;
-                }
+
+                if (!prefab) return false;
 
                 root = SandboxAssets.CloneVisual(prefab, "NullFrameSyncedRagdoll");
                 root.transform.position = SandboxWorld.Vector(definition.Position);
@@ -257,6 +264,7 @@ namespace S3_NullServers.Sandbox
             body.Bones = bones;
             body.Physics = root.GetComponentsInChildren<Rigidbody>(true).ToArray();
             body.Original = body.Physics.Select(value => (value.isKinematic, value.useGravity, value.detectCollisions)).ToArray();
+
             foreach (Rigidbody value in body.Physics)
             {
                 value.isKinematic = true;
@@ -274,6 +282,7 @@ namespace S3_NullServers.Sandbox
             }
 
             _bound.Add(root.Pointer);
+
             return true;
         }
 
@@ -295,15 +304,13 @@ namespace S3_NullServers.Sandbox
 
         internal void Update()
         {
-            if (!_world.Active)
-            {
-                return;
-            }
+            if (!_world.Active) return;
 
             if (Time.unscaledTime >= _nextScan)
             {
                 _nextScan = Time.unscaledTime + 1f;
                 Scan();
+
                 foreach (IntPtr pointer in _local.Where(pair => !pair.Value).Select(pair => pair.Key).ToArray())
                 {
                     _local.Remove(pointer);
@@ -321,12 +328,10 @@ namespace S3_NullServers.Sandbox
                 return;
             }
 
-            if (Time.unscaledTime < _poseAt)
-            {
-                return;
-            }
+            if (Time.unscaledTime < _poseAt) return;
 
             _poseAt = Time.unscaledTime + 0.1f;
+
             foreach (var pair in _bodies.ToArray())
             {
                 Body body = pair.Value;
@@ -338,16 +343,15 @@ namespace S3_NullServers.Sandbox
                     {
                         Id = pair.Key
                     });
+
                     continue;
                 }
 
-                if (Time.unscaledTime < body.NextSend)
-                {
-                    continue;
-                }
+                if (Time.unscaledTime < body.NextSend) continue;
 
                 bool sleeping = body.Physics.All(value => !value || value.IsSleeping());
                 body.NextSend = Time.unscaledTime + (sleeping ? 0.5f : 0.1f);
+
                 for (byte index = 0; index < body.Bones.Length; index++)
                 {
                     _world.Physics.Capture(pair.Key, index, body.Bones[index].position, body.Bones[index].rotation);
@@ -357,9 +361,12 @@ namespace S3_NullServers.Sandbox
 
         internal void Pose(PhysicsPose pose, int sequence)
         {
-            if (!_bodies.TryGetValue(pose.Id, out var body) ||
+            if 
+            (
+                !_bodies.TryGetValue(pose.Id, out var body) ||
                 pose.Bone >= body.Definition.Bones.Length ||
-                sequence <= body.Sequences[pose.Bone])
+                sequence <= body.Sequences[pose.Bone]
+            )
             {
                 return;
             }
@@ -371,13 +378,17 @@ namespace S3_NullServers.Sandbox
 
         internal void Pose(SandboxMessage message)
         {
-            if (!_bodies.TryGetValue(message.Id, out var body) ||
-                !SandboxPose.TryDecode(message.Data, out var offset, out var values))
+            if 
+            (
+                !_bodies.TryGetValue(message.Id, out var body) ||
+                !SandboxPose.TryDecode(message.Data, out var offset, out var values)
+            )
             {
                 return;
             }
 
-            if (body.Bones == null && !Bind(body) || offset + values.Length / 7 > body.Bones.Length)
+            if (body.Bones == null && !Bind(body) || 
+                offset + values.Length / 7 > body.Bones.Length)
             {
                 return;
             }
@@ -385,27 +396,23 @@ namespace S3_NullServers.Sandbox
             for (int index = 0; index < values.Length / 7; index++)
             {
                 int bone = offset + index;
-                if (message.Sequence <= body.Sequences[bone])
-                {
-                    continue;
-                }
+                if (message.Sequence <= body.Sequences[bone]) continue;
 
                 body.Sequences[bone] = message.Sequence;
                 body.Positions[bone] = new Vector3(values[index * 7], values[index * 7 + 1], values[index * 7 + 2]);
-                body.Rotations[bone] = new Quaternion(
+                body.Rotations[bone] = new Quaternion
+                (
                     values[index * 7 + 3],
                     values[index * 7 + 4],
                     values[index * 7 + 5],
-                    values[index * 7 + 6]);
+                    values[index * 7 + 6]
+                );
             }
         }
 
         internal void LateUpdate()
         {
-            if (!_world.Active || _world.IsHost)
-            {
-                return;
-            }
+            if (!_world.Active || _world.IsHost) return;
 
             foreach (Body body in _bodies.Values)
             {
@@ -425,39 +432,33 @@ namespace S3_NullServers.Sandbox
         internal void Remove(int id)
         {
             _world.Physics.Forget(id);
-            if (!_bodies.Remove(id, out var body))
-            {
-                return;
-            }
+            if (!_bodies.Remove(id, out var body)) return;
 
-            if (body.Root)
-            {
-                _bound.Remove(body.Root.Pointer);
-                Object.Destroy(body.Root);
-            }
+            if (!body.Root) return;
+
+            _bound.Remove(body.Root.Pointer);
+            Object.Destroy(body.Root);
         }
 
         internal void Clear()
         {
             foreach (Body body in _bodies.Values)
             {
-                if (body.Root)
+                if (!body.Root) continue;
+
+                if (body.Copy)
                 {
-                    if (body.Copy)
+                    Object.Destroy(body.Root);
+                }
+                else if (body.Original != null)
+                {
+                    for (int index = 0; index < body.Physics.Length; index++)
                     {
-                        Object.Destroy(body.Root);
-                    }
-                    else if (body.Original != null)
-                    {
-                        for (int index = 0; index < body.Physics.Length; index++)
-                        {
-                            if (body.Physics[index])
-                            {
-                                body.Physics[index].isKinematic = body.Original[index].Kinematic;
-                                body.Physics[index].useGravity = body.Original[index].Gravity;
-                                body.Physics[index].detectCollisions = body.Original[index].Collisions;
-                            }
-                        }
+                        if (!body.Physics[index]) continue;
+
+                        body.Physics[index].isKinematic = body.Original[index].Kinematic;
+                        body.Physics[index].useGravity = body.Original[index].Gravity;
+                        body.Physics[index].detectCollisions = body.Original[index].Collisions;
                     }
                 }
             }

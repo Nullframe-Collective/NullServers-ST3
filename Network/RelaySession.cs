@@ -1,20 +1,23 @@
 using HarmonyLib;
 using Il2Cpp;
+using Il2CppFishNet.Managing;
 using Il2CppFishNet.Transporting;
 using Il2CppFishNet.Transporting.Relay;
 using MelonLoader;
-using S3_NullServers.Room;
+using NullServers.Room;
 using System.Collections;
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
-namespace S3_NullServers.Network
+namespace NullServers.Network
 {
     internal sealed class RelaySession
     {
-        internal const string NullFrameGameVersion = "S3-NS";
+        internal const string NullFrameGameVersion = "S3-NC";
         private static readonly JsonSerializerOptions JsonOptions = new()
         {
             Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
@@ -31,27 +34,19 @@ namespace S3_NullServers.Network
         private bool _editingRoom;
         private bool _returningToMenu;
 
-        internal RelayTransport Relay
-        {
-            get; private set;
-        }
+        internal RelayTransport Relay { get; private set; }
         internal bool IsNullFrame { get; private set; } = true;
-        internal bool IsSwitching
-        {
-            get; set;
-        }
-        internal bool HoldRoomClosed
-        {
-            get; set;
-        }
+        internal bool IsSwitching { get; set; }
+        internal bool HoldRoomClosed { get; set; }
 
         internal string SelectedVersion => IsNullFrame ? NullFrameGameVersion : _officialVersion;
 
-        internal RelaySession(HarmonyLib.Harmony harmony, MelonLogger.Instance logger, RoomOptions options)
+        internal RelaySession(HarmonyLib.Harmony harmony, RoomOptions options, MelonLogger.Instance logger = null)
         {
             _instance = this;
-            _logger = logger;
             _options = options;
+            _logger = logger;
+
             harmony.Patch(
                 AccessTools.Method(typeof(RelayTransport), nameof(RelayTransport.Initialize)),
                 postfix: new HarmonyMethod(typeof(RelaySession), nameof(AfterRelayInitialize)));
@@ -121,10 +116,7 @@ namespace S3_NullServers.Network
 
             _listedRooms = _visibleRooms = -1;
 
-            if (Relay)
-            {
-                Relay._lastRoomList.Clear();
-            }
+            if (Relay) Relay._lastRoomList.Clear();
         }
 
         internal void ApplyVersion(RelayTransport relay)
@@ -146,7 +138,8 @@ namespace S3_NullServers.Network
 
         internal bool UpdateRoom(string name, int maxPlayers, string color, JsonObject changes, out string error)
         {
-            error = "Only the current NullFrame host can change this room.";
+            error = "Only the current NullFrame Servers host can change this room.";
+
             RelayRoomInfo current = Relay ? Relay.CurrentRoom : null;
             if (!IsNullFrame || current == null || !Relay.IsRoomHost || !IsReady(Relay))
             {
@@ -183,22 +176,25 @@ namespace S3_NullServers.Network
             properties["DisplayName"] = display;
             properties["NameColor"] = color.ToUpperInvariant();
             string data = properties.ToJsonString(JsonOptions);
-            if (System.Text.Encoding.UTF8.GetByteCount(data) > 1024)
+            if (Encoding.UTF8.GetByteCount(data) > 1024)
             {
                 error = "The formatted room settings exceed the relay limit.";
                 return false;
             }
 
             _editingRoom = true;
+
             try
             {
                 if (Relay.UpdateRoom(plain, maxPlayers, current.IsVisible, data))
                 {
                     error = null;
+
                     return true;
                 }
 
                 error = "The relay could not accept this update.";
+
                 return false;
             }
             finally
@@ -207,51 +203,38 @@ namespace S3_NullServers.Network
             }
         }
 
-        private static void AfterRelayInitialize(RelayTransport __instance)
-        {
-            _instance.ApplyVersion(__instance);
-        }
+        private static void AfterRelayInitialize(RelayTransport __instance) => _instance.ApplyVersion(__instance);
 
-        private static void BeforeConnect(RelayTransport __instance)
-        {
-            _instance.ApplyVersion(__instance);
-        }
+        private static void BeforeConnect(RelayTransport __instance) => _instance.ApplyVersion(__instance);
 
-        private static void BeforeAuthentication(RelayTransport __instance, ClientConnectionStateArgs __0)
+        private static void BeforeAuthentication(RelayTransport __instance, ClientConnectionStateArgs args)
         {
-            if (__instance.OfflineMode || __0.ConnectionState != LocalConnectionState.Started)
-            {
-                return;
-            }
+            if (__instance.OfflineMode || args.ConnectionState != LocalConnectionState.Started) return;
 
             _instance.ApplyVersion(__instance);
             _instance._connectionVersion = _instance.SelectedVersion;
         }
 
-        private static void AfterAuthentication(RelayTransport __instance, RelayAuthResult __0)
+        private static void AfterAuthentication(RelayTransport __instance, RelayAuthResult result)
         {
-            if (__0 == RelayAuthResult.Success)
+            if (result == RelayAuthResult.Success)
             {
-                _instance._logger.Msg($"Relay authenticated. GameVersion: {_instance._connectionVersion}.");
+                _instance._logger?.Msg($"Relay authenticated. GameVersion: {_instance._connectionVersion}.");
             }
             else
             {
                 _instance._connectionVersion = null;
-                _instance._logger.Warning($"Relay authentication failed: {__0}.");
+                _instance._logger?.Warning($"Relay authentication failed: {result}.");
             }
         }
 
         private static string ReadRoomVersion(string roomData)
         {
-            if (string.IsNullOrWhiteSpace(roomData))
-            {
-                return null;
-            }
+            if (string.IsNullOrWhiteSpace(roomData)) return null;
 
             try
             {
                 using var document = JsonDocument.Parse(roomData);
-
                 return document.RootElement.ValueKind == JsonValueKind.Object &&
                     document.RootElement.TryGetProperty("Version", out var version) &&
                     version.ValueKind == JsonValueKind.String
@@ -264,69 +247,63 @@ namespace S3_NullServers.Network
             }
         }
 
-        private static bool BeforeRoomList(
+        private static bool BeforeRoomList
+        (
             RelayTransport __instance,
-            ref Il2CppSystem.Collections.Generic.IReadOnlyList<RelayRoomInfo> __0)
+            ref Il2CppSystem.Collections.Generic.IReadOnlyList<RelayRoomInfo> list
+        )
         {
-            if (__instance.OfflineMode)
-            {
-                return true;
-            }
-
-            if (!_instance.IsReady(__instance))
-            {
-                return false;
-            }
+            if (__instance.OfflineMode) return true;
+            if (!_instance.IsReady(__instance)) return false;
 
             Il2CppSystem.Collections.Generic.List<RelayRoomInfo> rooms = new();
-            int count = __0.Cast<Il2CppSystem.Collections.Generic.IReadOnlyCollection<RelayRoomInfo>>().Count;
+            int count = list.Cast<Il2CppSystem.Collections.Generic.IReadOnlyCollection<RelayRoomInfo>>().Count;
 
             _instance._roomVersions.Clear();
             _instance._roomNameColors.Clear();
 
             for (int i = 0; i < count; i++)
             {
-                RelayRoomInfo room = __0[i];
-
+                RelayRoomInfo room = list[i];
                 string version = ReadRoomVersion(room.RoomData);
 
                 _instance._roomVersions[room.Id] = version;
 
-                if (version == _instance.SelectedVersion)
-                {
-                    rooms.Add(room);
-                    _instance._roomNameColors[room.Id] = RoomOptions.ReadNameColor(room.RoomData);
-                }
+                if (version != _instance.SelectedVersion) continue;
+
+                rooms.Add(room);
+                _instance._roomNameColors[room.Id] = RoomOptions.ReadNameColor(room.RoomData);
             }
 
             if (_instance._listedRooms != count || _instance._visibleRooms != rooms.Count)
             {
-                _instance._logger.Msg($"Room list: {rooms.Count}/{count} rooms match {_instance.SelectedVersion}.");
+                _instance._logger?.Msg($"Room list: {rooms.Count}/{count} rooms match {_instance.SelectedVersion}.");
             }
 
             _instance._listedRooms = count;
             _instance._visibleRooms = rooms.Count;
 
-            __0 = rooms.Cast<Il2CppSystem.Collections.Generic.IReadOnlyList<RelayRoomInfo>>();
+            list = rooms.Cast<Il2CppSystem.Collections.Generic.IReadOnlyList<RelayRoomInfo>>();
+
             return true;
         }
 
-        private static bool BeforeRoomSettings(
+        private static bool BeforeRoomSettings
+        (
             RelayTransport __instance,
-            ref string __0,
-            ref int __1,
-            ref string __3,
-            ref bool __result)
+            ref string name,
+            ref int maxPlayers,
+            ref string roomData,
+            ref bool __result
+        )
         {
-            if (__instance.OfflineMode)
-            {
-                return true;
-            }
+            if (__instance.OfflineMode) return true;
 
             if (_instance.IsReady(__instance))
             {
-                JsonObject properties = JsonNode.Parse(__3).AsObject();
+                JsonObject properties = JsonNode.Parse(roomData).AsObject();
                 properties["Version"] = _instance.SelectedVersion;
+
                 if (_instance.IsNullFrame && _instance.HoldRoomClosed)
                 {
                     properties["IsOpen"] = false;
@@ -335,15 +312,17 @@ namespace S3_NullServers.Network
                 if (_instance.IsNullFrame)
                 {
                     RelayRoomInfo current = __instance.CurrentRoom;
+
                     if (!_instance._editingRoom)
                     {
-                        __1 = Math.Clamp(current?.MaxPlayers ?? _instance._options.MaxPlayers, 1, RoomOptions.PlayerLimit);
-                        properties["NameColor"] = current == null
-                            ? _instance._options.NameColor
-                            : RoomOptions.ReadNameColor(current.RoomData) ?? _instance._options.NameColor;
+                        maxPlayers = Math.Clamp(current?.MaxPlayers ?? _instance._options.MaxPlayers, 1, RoomOptions.PlayerLimit);
+                        properties["NameColor"] = current == null ? 
+                                                  _instance._options.NameColor : 
+                                                  RoomOptions.ReadNameColor(current.RoomData) ?? _instance._options.NameColor;
+
                         if (current != null)
                         {
-                            __0 = current.Name;
+                            name = current.Name;
                             properties["DisplayName"] = RoomName.ReadDisplay(current.RoomData, current.Name);
                         }
                         else if (_instance._options.DisplayName != null)
@@ -351,11 +330,12 @@ namespace S3_NullServers.Network
                             if (!RoomName.TryParse(_instance._options.DisplayName, out var plain, out var display, out var error))
                             {
                                 __result = false;
-                                _instance._logger.Warning(error);
+                                _instance._logger?.Warning(error);
+
                                 return false;
                             }
 
-                            __0 = plain;
+                            name = plain;
                             properties["DisplayName"] = display;
                         }
                     }
@@ -364,10 +344,10 @@ namespace S3_NullServers.Network
                     {
                         foreach (var property in JsonNode.Parse(current.RoomData).AsObject())
                         {
-                            if (!properties.ContainsKey(property.Key))
-                            {
-                                properties[property.Key] = property.Value == null ? null : JsonNode.Parse(property.Value.ToJsonString());
-                            }
+                            if (properties.ContainsKey(property.Key)) continue;
+
+                            properties[property.Key] = 
+                                property.Value == null ? null : JsonNode.Parse(property.Value.ToJsonString());
                         }
                     }
                 }
@@ -377,89 +357,93 @@ namespace S3_NullServers.Network
                     properties.Remove("DisplayName");
                 }
 
-                __3 = properties.ToJsonString(JsonOptions);
+                roomData = properties.ToJsonString(JsonOptions);
+
                 return true;
             }
 
             __result = false;
 
-            _instance._logger.Warning("Room action blocked: the selected server group is not connected.");
+            _instance._logger?.Warning("Room action blocked: the selected server group is not connected.");
+
             return false;
         }
 
-        private static bool BeforeJoinRoom(RelayTransport __instance, string __0, ref bool __result)
+        private static bool BeforeJoinRoom(RelayTransport __instance, string roomId, ref bool __result)
         {
-            if (__instance.OfflineMode)
-            {
-                return true;
-            }
+            if (__instance.OfflineMode) return true;
 
-            if (_instance.IsReady(__instance) &&
-                (string.IsNullOrEmpty(__0) ||
-                !_instance._roomVersions.TryGetValue(__0, out var version) ||
-                version == _instance.SelectedVersion))
+            if 
+            (
+                _instance.IsReady(__instance) &&
+                (string.IsNullOrEmpty(roomId) ||
+                !_instance._roomVersions.TryGetValue(roomId, out var version) ||
+                version == _instance.SelectedVersion)
+            )
             {
                 return true;
             }
 
             __result = false;
 
-            _instance._logger.Warning("Join blocked: the room belongs to another server group or the connection is not ready.");
+            _instance._logger?.Warning("Join blocked: the room belongs to another server group or the connection is not ready.");
+
             return false;
         }
 
-        private static void BeforeRoomJoined(RelayTransport __instance, RelayRoomInfo __0)
+        private static void BeforeRoomJoined(RelayTransport __instance, RelayRoomInfo info)
         {
-            if (__instance.OfflineMode ||
+            if 
+            (
+                __instance.OfflineMode ||
                 (_instance.IsReady(__instance) &&
-                ReadRoomVersion(__0.RoomData) == _instance.SelectedVersion &&
-                __0.MaxPlayers >= 1 &&
-                __0.MaxPlayers <= (_instance.IsNullFrame ? RoomOptions.PlayerLimit : 12)))
+                ReadRoomVersion(info.RoomData) == _instance.SelectedVersion &&
+                info.MaxPlayers >= 1 &&
+                info.MaxPlayers <= (_instance.IsNullFrame ? RoomOptions.PlayerLimit : 12))
+            )
             {
                 return;
             }
 
             __instance.StopConnection(false);
-            _instance._logger.Warning("Join cancelled: the room does not belong to the selected server group.");
+            _instance._logger?.Warning("Join cancelled: the room does not belong to the selected server group.");
         }
 
-        private static void AfterRoomCreated(RelayRoomInfo __0)
+        private static void AfterRoomCreated(RelayRoomInfo info)
         {
-            if (!_instance.IsNullFrame)
-            {
-                return;
-            }
+            if (!_instance.IsNullFrame) return;
 
-            string color = RoomOptions.ReadNameColor(__0.RoomData);
-            _instance._roomNameColors[__0.Id] = color;
-            _instance._logger.Msg($"NullFrame room created. Id: {__0.Id}; Players: {__0.PlayerCount}/{__0.MaxPlayers}; NameColor: {color ?? "none"}.");
+            string color = RoomOptions.ReadNameColor(info.RoomData);
+            _instance._roomNameColors[info.Id] = color;
+            _instance._logger?.Msg($"NullFrame Servers room created. Id: {info.Id}; Players: {info.PlayerCount}/{info.MaxPlayers}; NameColor: {color ?? "none"}.");
         }
 
-        private static void AfterRoomUpdated(RelayRoomInfo __0)
+        private static void AfterRoomUpdated(RelayRoomInfo info)
         {
-            if (_instance.IsNullFrame)
-            {
-                string color = RoomOptions.ReadNameColor(__0.RoomData);
-                _instance._roomNameColors[__0.Id] = color;
-                _instance._logger.Msg($"NullFrame room updated. Players: {__0.PlayerCount}/{__0.MaxPlayers}; NameColor: {color ?? "none"}.");
-            }
+            if (!_instance.IsNullFrame) return;
+
+            string color = RoomOptions.ReadNameColor(info.RoomData);
+            _instance._roomNameColors[info.Id] = color;
+            _instance._logger?.Msg($"NullFrame Servers room updated. Players: {info.PlayerCount}/{info.MaxPlayers}; NameColor: {color ?? "none"}.");
         }
 
-        private static void AfterCreateRoomFailed(RelayRoomResult __0)
+        private static void AfterCreateRoomFailed(RelayRoomResult result)
         {
-            if (_instance.IsNullFrame)
-            {
-                _instance._logger.Warning($"NullFrame room creation failed: {__0}.");
-            }
+            if (!_instance.IsNullFrame) return;
+
+           _instance._logger?.Warning($"NullFrame Servers room creation failed: {result}.");
         }
 
-        private static void AfterRoomLeft(RelayTransport __instance, RelayRoomLeaveReason __0)
+        private static void AfterRoomLeft(RelayTransport __instance, RelayRoomLeaveReason reason)
         {
             RelaySession instance = _instance;
-            if (!instance.IsNullFrame ||
+            if 
+            (
+                !instance.IsNullFrame ||
                 instance.IsSwitching ||
                 instance._returningToMenu ||
-                (__0 != RelayRoomLeaveReason.Kicked && __0 != RelayRoomLeaveReason.KickedByModerator))
+                (reason != RelayRoomLeaveReason.Kicked && reason != RelayRoomLeaveReason.KickedByModerator)
+            )
             {
                 return;
             }
@@ -471,63 +455,54 @@ namespace S3_NullServers.Network
         private IEnumerator ReturnToMenu(RelayTransport relay, string removedRoomId)
         {
             bool Cancelled() => IsSwitching ||
-                Relay != relay ||
-                !relay ||
-                (relay.CurrentRoom != null && relay.CurrentRoom.Id != removedRoomId);
+                                Relay != relay ||
+                                !relay ||
+                                (relay.CurrentRoom != null && relay.CurrentRoom.Id != removedRoomId);
 
             try
             {
                 yield return null;
-                if (Cancelled())
-                {
-                    yield break;
-                }
+
+                if (Cancelled()) yield break;
 
                 NetBootstrap bootstrap = NetBootstrap.GJDGDIGECJN;
-                if (!bootstrap)
-                {
-                    yield break;
-                }
+                if (!bootstrap) yield break;
 
-                Il2CppFishNet.Managing.NetworkManager manager = bootstrap.HLNKMGIBPIG;
+                NetworkManager manager = bootstrap.HLNKMGIBPIG;
                 string menuScene = bootstrap._menuScene;
                 bootstrap.HNHLFANHCFG = menuScene;
                 bootstrap.NNLCAJPMCPG = null;
+
                 if (manager.ClientManager.Started)
                 {
                     manager.ClientManager.StopConnection();
                 }
 
-                if (relay)
-                {
-                    relay.DisconnectFromRelay();
-                }
+                if (relay) relay.DisconnectFromRelay();
 
                 float deadline = Time.realtimeSinceStartup + 10f;
-                while (manager &&
+                while 
+                (
+                    manager &&
                     (manager.ClientManager.Started || manager.SceneManager.IteratingQueue) &&
-                    Time.realtimeSinceStartup < deadline)
+                    Time.realtimeSinceStartup < deadline
+                )
                 {
-                    if (Cancelled())
-                    {
-                        yield break;
-                    }
+                    if (Cancelled()) yield break;
 
                     yield return null;
                 }
 
                 yield return null;
-                if (Cancelled())
+
+                if (Cancelled()) yield break;
+
+                if (SceneManager.GetActiveScene().name != menuScene)
                 {
-                    yield break;
+                    SceneManager.LoadScene(menuScene);
                 }
 
-                if (UnityEngine.SceneManagement.SceneManager.GetActiveScene().name != menuScene)
-                {
-                    UnityEngine.SceneManagement.SceneManager.LoadScene(menuScene);
-                }
-
-                _logger.Msg("Removed from the room. Returned to the main menu.");
+                _logger?.Msg("Removed from the room. Returned to the main menu.");
             }
             finally
             {
@@ -537,17 +512,16 @@ namespace S3_NullServers.Network
 
         private static bool BeforeRoomCompatibility(RelayRoomInfo __0, RoomProperties __1, ref bool __result)
         {
-            if (_instance.Relay && _instance.Relay.OfflineMode)
-            {
-                return true;
-            }
+            if (_instance.Relay && _instance.Relay.OfflineMode) return true;
 
-            __result = __0.MaxPlayers >= 1 &&
+            __result = 
+                __0.MaxPlayers >= 1 &&
                 __0.MaxPlayers <= (_instance.IsNullFrame ? RoomOptions.PlayerLimit : 12) &&
                 !string.IsNullOrEmpty(__1.MapName) &&
                 Application.CanStreamedLevelBeLoaded(__1.MapName) &&
                 __1.Version == _instance.SelectedVersion &&
                 __1.IsOpen;
+
             return false;
         }
     }

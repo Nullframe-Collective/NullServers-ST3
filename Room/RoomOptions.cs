@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace S3_NullServers.Room
+namespace NullServers.Room
 {
     internal sealed class RoomOptions
     {
@@ -8,10 +8,7 @@ namespace S3_NullServers.Room
 
         internal int MaxPlayers { get; set; } = 12;
         internal string NameColor { get; set; } = "#FFFFFF";
-        internal string DisplayName
-        {
-            get; set;
-        }
+        internal string DisplayName { get; set; }
 
         internal static bool IsValidColor(string color)
         {
@@ -20,17 +17,17 @@ namespace S3_NullServers.Room
 
         internal static string ReadNameColor(string roomData)
         {
-            if (string.IsNullOrWhiteSpace(roomData))
-            {
-                return null;
-            }
+            if (string.IsNullOrWhiteSpace(roomData)) return null;
 
             try
             {
                 using var document = JsonDocument.Parse(roomData);
-                if (document.RootElement.ValueKind != JsonValueKind.Object ||
-                    !document.RootElement.TryGetProperty("NameColor", out var property) ||
-                    property.ValueKind != JsonValueKind.String)
+                if 
+                (
+                    document.RootElement.ValueKind != JsonValueKind.Object ||
+                    !document.RootElement.TryGetProperty(nameof(NameColor), out var property) ||
+                    property.ValueKind != JsonValueKind.String
+                )
                 {
                     return null;
                 }

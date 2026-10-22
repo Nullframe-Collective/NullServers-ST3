@@ -1,11 +1,11 @@
 using Il2Cpp;
 using Il2CppInterop.Runtime;
-using S3_NullServers.Network;
+using NullServers.Network;
 using UnityEngine;
 using UnityEngine.Rendering;
 using Object = UnityEngine.Object;
 
-namespace S3_NullServers.Sandbox
+namespace NullServers.Sandbox
 {
     internal sealed class SandboxBuilding
     {
@@ -47,27 +47,16 @@ namespace S3_NullServers.Sandbox
         private float _clickAfter;
 
         internal bool Placing => _ghost || _selecting;
-
         internal bool SuppressWeapons => _world.Gun.Equipped;
-
         internal bool Selecting => _selecting;
-
         internal bool Editing => _editing;
-
         internal int SelectedId => _editing ? _draft?.Id ?? 0 : 0;
-
         internal BuildingObject Draft => _draft;
-
         internal IReadOnlyList<string> Recent => _recent;
-
         internal IEnumerable<BuildingObject> States => _objects.Values.Select(item => item.State);
-
         internal GameObject Root(int id) => _objects.GetValueOrDefault(id)?.Root;
-
         internal BuildingObject State(int id) => _objects.GetValueOrDefault(id)?.State;
-
         internal int TargetId => Target()?.State.Id ?? 0;
-
         internal bool SelectId(int id) => SelectItem(_objects.GetValueOrDefault(id));
 
         internal void Highlight(int id)
@@ -106,23 +95,32 @@ namespace S3_NullServers.Sandbox
                         return "This object is not available on the host.";
                     }
 
-                    if (state.Dynamic &&
-                        _objects.Values.Count(item => item.State.Dynamic && item.State.Id != state.Id) >= 64)
+                    if 
+                    (
+                        state.Dynamic &&
+                        _objects.Values.Count(item => item.State.Dynamic && item.State.Id != state.Id) >= 64
+                    )
                     {
                         return "This room already has 64 building objects with active physics.";
                     }
 
                     if (message.Kind == SandboxKind.Create)
                     {
-                        if (_objects.Count >= SandboxMessage.MaxObjects ||
-                            _objects.Values.Count(item => item.State.Owner == sender) >= SandboxMessage.MaxObjectsPerPlayer)
+                        if 
+                        (
+                            _objects.Count >= SandboxMessage.MaxObjects ||
+                            _objects.Values.Count(item => item.State.Owner == sender) >= SandboxMessage.MaxObjectsPerPlayer
+                        )
                         {
                             return $"Building limit reached ({SandboxMessage.MaxObjectsPerPlayer} per player, {SandboxMessage.MaxObjects} per room).";
                         }
 
                         PlayerNetworkController avatar = SandboxWorld.Avatar(sender);
-                        if (!avatar ||
-                            Vector3.Distance(avatar.transform.position, SandboxWorld.Vector(state.Position)) > 120f)
+                        if 
+                        (
+                            !avatar ||
+                            Vector3.Distance(avatar.transform.position, SandboxWorld.Vector(state.Position)) > 120f
+                        )
                         {
                             return "Place objects within 120 metres of your character.";
                         }
@@ -138,12 +136,16 @@ namespace S3_NullServers.Sandbox
                             Owner = sender,
                             Revision = 1
                         };
+
                         _nextId = _nextId % 999999 + 1;
                     }
                     else
                     {
-                        if (!_objects.TryGetValue(state.Id, out var item) ||
-                            !SandboxMessage.CanEdit(item.State.Owner, sender, admin))
+                        if 
+                        (
+                            !_objects.TryGetValue(state.Id, out var item) ||
+                            !SandboxMessage.CanEdit(item.State.Owner, sender, admin)
+                        )
                         {
                             return "You can edit your own objects. Administrators can edit all objects.";
                         }
@@ -164,15 +166,21 @@ namespace S3_NullServers.Sandbox
                             Revision = item.State.Revision + 1
                         };
                     }
+
                     Apply(state);
                     _world.Send(_world.Message(SandboxKind.Object) with
                     {
                         Object = state
                     });
+
                     return null;
                 case SandboxKind.Delete:
-                    if (!_objects.TryGetValue(message.Id, out var deleted) ||
-                        !SandboxMessage.CanEdit(deleted.State.Owner, sender, admin))
+
+                    if 
+                    (
+                        !_objects.TryGetValue(message.Id, out var deleted) ||
+                        !SandboxMessage.CanEdit(deleted.State.Owner, sender, admin)
+                    )
                     {
                         return "You cannot delete this object.";
                     }
@@ -182,8 +190,10 @@ namespace S3_NullServers.Sandbox
                     {
                         Id = message.Id
                     });
+
                     return null;
                 case SandboxKind.Clear:
+
                     if (!admin)
                     {
                         return "Only administrators can clear the building objects.";
@@ -191,6 +201,7 @@ namespace S3_NullServers.Sandbox
 
                     Clear();
                     _world.Send(_world.Message(SandboxKind.Clear));
+
                     return null;
                 default:
                     return "Unknown sandbox request.";
@@ -207,10 +218,7 @@ namespace S3_NullServers.Sandbox
             bool created = item == null;
             if (created)
             {
-                if (_objects.Count >= SandboxMessage.MaxObjects)
-                {
-                    return;
-                }
+                if (_objects.Count >= SandboxMessage.MaxObjects) return;
 
                 GameObject root = _world.Assets.Create(state.Asset, true);
                 if (!root)
@@ -221,6 +229,7 @@ namespace S3_NullServers.Sandbox
                     }
 
                     _world.SetStatus("Waiting for prop: " + state.Asset);
+
                     return;
                 }
 
@@ -230,7 +239,9 @@ namespace S3_NullServers.Sandbox
                     Root = root,
                     BaseScale = root.transform.localScale
                 };
-                root.name = "NullFrameBuild_" + state.Id;
+
+                root.name = "Build_" + state.Id;
+
                 List<(Material, Texture)> materials = new();
                 foreach (Renderer renderer in root.GetComponentsInChildren<Renderer>())
                 {
@@ -247,13 +258,17 @@ namespace S3_NullServers.Sandbox
             }
 
             item.State = state;
-            item.Root.transform.SetPositionAndRotation(
+            item.Root.transform.SetPositionAndRotation
+            (
                 SandboxWorld.Vector(state.Position),
-                SandboxWorld.Quaternion(state.Rotation));
+                SandboxWorld.Quaternion(state.Rotation)
+            );
             item.Root.transform.localScale = Vector3.Scale(item.BaseScale, SandboxWorld.Vector(state.Scale));
             item.Position = item.Root.transform.position;
             item.Rotation = item.Root.transform.rotation;
-            ColorUtility.TryParseHtmlString(state.Color, out var color);
+
+            ColorUtility.TryParseHtmlString(state.Color, out Color color);
+            
             foreach (var pair in item.Materials)
             {
                 pair.Material.color = color;
@@ -271,10 +286,12 @@ namespace S3_NullServers.Sandbox
                 body.isKinematic = !_world.IsHost || !state.Dynamic;
                 body.useGravity = state.Dynamic;
                 body.interpolation = RigidbodyInterpolation.Interpolate;
-                body.mass = Mathf.Clamp(
+                body.mass = Mathf.Clamp
+                (
                     item.Root.transform.localScale.x * item.Root.transform.localScale.y * item.Root.transform.localScale.z,
                     0.1f,
-                    100f);
+                    100f
+                );
             }
 
             if (created && state.Owner == _world.LocalId)
@@ -288,6 +305,7 @@ namespace S3_NullServers.Sandbox
             _world.Physics.Forget(id);
             _world.Gun.Removed(id);
             _undo.Remove(id);
+
             if (_undoPending == id)
             {
                 _undoPending = 0;
@@ -299,10 +317,7 @@ namespace S3_NullServers.Sandbox
             }
 
             _pending.Remove(id);
-            if (!_objects.Remove(id, out var item))
-            {
-                return;
-            }
+            if (!_objects.Remove(id, out var item)) return;
 
             if (item.Root)
             {
@@ -311,10 +326,9 @@ namespace S3_NullServers.Sandbox
 
             foreach (var pair in item.Materials)
             {
-                if (pair.Material)
-                {
-                    Object.Destroy(pair.Material);
-                }
+                if (!pair.Material) continue;
+
+                Object.Destroy(pair.Material);
             }
         }
 
@@ -323,6 +337,7 @@ namespace S3_NullServers.Sandbox
             Stop();
             _undo.Clear();
             _undoPending = 0;
+
             if (_outline)
             {
                 Object.Destroy(_outline);
@@ -337,6 +352,7 @@ namespace S3_NullServers.Sandbox
             _outlineMaterial = null;
             _localAvatar = _localController = null;
             _actorCheck = 0f;
+
             foreach (int id in _objects.Keys.ToArray())
             {
                 Remove(id);
@@ -350,7 +366,9 @@ namespace S3_NullServers.Sandbox
         {
             _world.Gun.Equip(true);
             Stop();
-            _draft = new BuildingObject(
+
+            _draft = new BuildingObject
+            (
                 0,
                 Math.Max(0, _world.LocalId),
                 asset,
@@ -359,11 +377,15 @@ namespace S3_NullServers.Sandbox
                 new Point3(1f, 1f, 1f),
                 "#FFFFFF",
                 "",
-                false);
+                false
+            );
             _editing = false;
+
             CreateGhost();
+
             _recent.Remove(asset);
             _recent.Insert(0, asset);
+
             if (_recent.Count > 12)
             {
                 _recent.RemoveAt(12);
@@ -385,30 +407,30 @@ namespace S3_NullServers.Sandbox
         {
             id = 0;
             point = default;
+
             if (!camera || !Surface(new Ray(camera.transform.position, camera.transform.forward), 40f, out var hit))
             {
                 return false;
             }
 
-            Placed item = _objects.Values.FirstOrDefault(value => value.Root &&
+            Placed item = _objects.Values.FirstOrDefault
+            (
+                value => value.Root &&
                 (hit.transform == value.Root.transform ||
-                hit.transform.IsChildOf(value.Root.transform)));
-            if (item == null)
-            {
-                return false;
-            }
+                hit.transform.IsChildOf(value.Root.transform))
+            );
+
+            if (item == null) return false;
 
             id = item.State.Id;
             point = hit.point;
+
             return true;
         }
 
         private bool SelectItem(Placed item)
         {
-            if (item == null)
-            {
-                return false;
-            }
+            if (item == null) return false;
 
             if (!SandboxMessage.CanEdit(item.State.Owner, _world.LocalId, _world.IsAdmin))
             {
@@ -417,13 +439,17 @@ namespace S3_NullServers.Sandbox
             }
 
             Stop();
+
             _draft = item.State with
             {
                 Position = SandboxWorld.Point(item.Root.transform.position),
                 Rotation = SandboxWorld.Rotation(item.Root.transform.rotation)
             };
+
             _editing = true;
+
             CreateGhost();
+
             foreach (Renderer renderer in item.Root.GetComponentsInChildren<Renderer>())
             {
                 _hiddenSelected.Add((renderer, renderer.enabled));
@@ -431,6 +457,7 @@ namespace S3_NullServers.Sandbox
             }
 
             _world.SetStatus("Selected " + (_world.Assets.Find(item.State.Asset)?.Name ?? "object") + " #" + item.State.Id + ". Z: delete. Building > Edit selected: settings.");
+
             return true;
         }
 
@@ -447,15 +474,13 @@ namespace S3_NullServers.Sandbox
         private void CreateGhost()
         {
             _ghost = _world.Assets.Create(_draft.Asset, false);
-            if (!_ghost)
-            {
-                return;
-            }
+            if (!_ghost) return;
 
-            _ghost.name = "NullFrameBuildGhost";
+            _ghost.name = "BuildGhost";
             _ghostBaseScale = _ghost.transform.localScale;
             _ghostMaterial = new Material(Shader.Find("Sprites/Default") ?? Shader.Find("Unlit/Transparent"));
             _ghostMaterial.color = new Color(0.2f, 0.85f, 1f, 0.35f);
+
             foreach (Transform node in _ghost.GetComponentsInChildren<Transform>(true))
             {
                 node.gameObject.layer = 2;
@@ -463,7 +488,8 @@ namespace S3_NullServers.Sandbox
 
             foreach (Renderer renderer in _ghost.GetComponentsInChildren<Renderer>())
             {
-                renderer.sharedMaterials = new Il2CppInterop.Runtime.InteropTypes.Arrays.Il2CppReferenceArray<Material>(
+                renderer.sharedMaterials = 
+                    new Il2CppInterop.Runtime.InteropTypes.Arrays.Il2CppReferenceArray<Material>(
                     Enumerable.Repeat(_ghostMaterial, Math.Max(1, renderer.sharedMaterials.Length)).ToArray());
                 renderer.shadowCastingMode = ShadowCastingMode.Off;
             }
@@ -474,10 +500,7 @@ namespace S3_NullServers.Sandbox
 
         internal void Change(Point3 scale, Rotation4 rotation, string color, string texture, bool dynamic)
         {
-            if (_draft == null)
-            {
-                return;
-            }
+            if (_draft == null) return;
 
             BuildingObject draft = _draft with
             {
@@ -487,6 +510,7 @@ namespace S3_NullServers.Sandbox
                 Texture = texture,
                 Dynamic = dynamic
             };
+
             if (draft.Valid)
             {
                 _draft = draft;
@@ -506,19 +530,14 @@ namespace S3_NullServers.Sandbox
 
         internal void Confirm()
         {
-            if (!_ghost || !_hasSurface && !_editing)
-            {
-                return;
-            }
+            if (!_ghost || !_hasSurface && !_editing) return;
 
             _world.Submit(_world.Message(_editing ? SandboxKind.Edit : SandboxKind.Create) with
             {
                 Object = _draft
             });
-            if (_editing)
-            {
-                Stop();
-            }
+
+            if (_editing) Stop();
         }
 
         internal void DeleteSelected()
@@ -558,6 +577,7 @@ namespace S3_NullServers.Sandbox
                 {
                     Id = id
                 });
+
                 return;
             }
 
@@ -568,11 +588,14 @@ namespace S3_NullServers.Sandbox
 
         private bool InputAllowed()
         {
-            if (!_world.Gun.Equipped ||
+            if 
+            (
+                !_world.Gun.Equipped ||
                 !_world.Active ||
                 Cursor.lockState != CursorLockMode.Locked ||
                 !_world.ConsoleEnabled &&
-                !_world.IsAdmin)
+                !_world.IsAdmin
+            )
             {
                 return false;
             }
@@ -585,6 +608,7 @@ namespace S3_NullServers.Sandbox
 
             GameObject selected = UnityEngine.EventSystems.EventSystem.current?.currentSelectedGameObject;
             UnityEngine.UI.InputField input = selected ? selected.GetComponent(Il2CppType.Of<UnityEngine.UI.InputField>())?.Cast<UnityEngine.UI.InputField>() : null;
+
             return !input || !input.isFocused;
         }
 
@@ -596,12 +620,10 @@ namespace S3_NullServers.Sandbox
             }
 
             _inputFrame = Time.frameCount;
-            if (!InputAllowed())
-            {
-                return;
-            }
+            if (!InputAllowed()) return;
 
             float now = Time.unscaledTime;
+
             if (Input.GetKeyDown(KeyCode.Escape))
             {
                 Stop();
@@ -651,6 +673,7 @@ namespace S3_NullServers.Sandbox
 
             _ghost = null;
             _ghostMaterial = null;
+
             foreach (var item in _hiddenSelected)
             {
                 if (item.Renderer)
@@ -660,6 +683,7 @@ namespace S3_NullServers.Sandbox
             }
 
             _hiddenSelected.Clear();
+
             if (_outline)
             {
                 _outline.SetActive(false);
@@ -677,19 +701,24 @@ namespace S3_NullServers.Sandbox
             foreach (RaycastHit candidate in Physics.RaycastAll(ray, distance, ~(1 << 2), QueryTriggerInteraction.Ignore).OrderBy(value => value.distance))
             {
                 Transform node = candidate.transform;
-                if (_localAvatar &&
+                if 
+                (
+                    _localAvatar &&
                     (node == _localAvatar || node.IsChildOf(_localAvatar)) ||
                     _localController &&
-                    (node == _localController || node.IsChildOf(_localController)))
+                    (node == _localController || node.IsChildOf(_localController))
+                )
                 {
                     continue;
                 }
 
                 hit = candidate;
+
                 return true;
             }
 
             hit = default;
+
             return false;
         }
 
@@ -697,20 +726,24 @@ namespace S3_NullServers.Sandbox
         {
             if (!_outline)
             {
-                _outline = new GameObject("NullFrameBuildSelection");
+                _outline = new GameObject("BuildSelection");
                 _outline.layer = 2;
                 _outlineMaterial = new Material(Shader.Find("Sprites/Default"));
                 _outlineMaterial.SetInt("_ZTest", (int)CompareFunction.Always);
                 _outlineEdges = new Transform[12];
+
                 for (int index = 0; index < _outlineEdges.Length; index++)
                 {
                     GameObject edge = GameObject.CreatePrimitive(PrimitiveType.Cube);
                     edge.name = "SelectionEdge";
                     edge.layer = 2;
                     edge.transform.SetParent(_outline.transform, false);
+
                     Collider collider = edge.GetComponent<Collider>();
                     collider.enabled = false;
+
                     Object.Destroy(collider);
+
                     Renderer renderer = edge.GetComponent<Renderer>();
                     renderer.sharedMaterial = _outlineMaterial;
                     renderer.shadowCastingMode = ShadowCastingMode.Off;
@@ -723,10 +756,11 @@ namespace S3_NullServers.Sandbox
             _outlineMaterial.color = color;
             float width = Mathf.Clamp(bounds.size.magnitude / 400f, 0.015f, 0.06f);
             bounds.Expand(0.025f);
+
             Vector3 a = bounds.min;
             Vector3 b = bounds.max;
-            Vector3[] corners = new[]
-            {
+            Vector3[] corners =
+            [
                 new Vector3(a.x, a.y, a.z),
                 new Vector3(b.x, a.y, a.z),
                 new Vector3(b.x, a.y, b.z),
@@ -735,9 +769,10 @@ namespace S3_NullServers.Sandbox
                 new Vector3(b.x, b.y, a.z),
                 new Vector3(b.x, b.y, b.z),
                 new Vector3(a.x, b.y, b.z)
-            };
-            int[] order = new[]
-            {
+            ];
+
+            int[] order =
+            [
                 0,
                 1,
                 1,
@@ -762,14 +797,19 @@ namespace S3_NullServers.Sandbox
                 6,
                 3,
                 7
-            };
+            ];
+
             for (int index = 0; index < _outlineEdges.Length; index++)
             {
                 Vector3 from = corners[order[index * 2]];
                 Vector3 to = corners[order[index * 2 + 1]];
-                _outlineEdges[index].SetPositionAndRotation(
+
+                _outlineEdges[index].SetPositionAndRotation
+                (
                     (from + to) * 0.5f,
-                    Quaternion.FromToRotation(Vector3.up, to - from));
+                    Quaternion.FromToRotation(Vector3.up, to - from)
+                );
+
                 _outlineEdges[index].localScale = new Vector3(width, (to - from).magnitude, width);
             }
         }
@@ -793,10 +833,7 @@ namespace S3_NullServers.Sandbox
 
             foreach (Placed item in _objects.Values)
             {
-                if (!item.Root)
-                {
-                    continue;
-                }
+                if (!item.Root) continue;
 
                 if (!string.IsNullOrEmpty(item.State.Texture))
                 {
@@ -813,30 +850,38 @@ namespace S3_NullServers.Sandbox
                 if (!_world.IsHost && item.State.Dynamic)
                 {
                     float amount = 1f - Mathf.Exp(-25 * Time.unscaledDeltaTime);
-                    item.Root.transform.SetPositionAndRotation(
-                        Vector3.Lerp(
+                    item.Root.transform.SetPositionAndRotation
+                    (
+                        Vector3.Lerp
+                        (
                             item.Root.transform.position,
                             item.Position,
-                            amount),
-                        Quaternion.Slerp(item.Root.transform.rotation, item.Rotation, amount));
+                            amount
+                        ),
+                        Quaternion.Slerp(item.Root.transform.rotation, item.Rotation, amount)
+                    );
                 }
             }
 
             if (_world.IsHost && Time.unscaledTime >= _nextPhysics)
             {
                 _nextPhysics = Time.unscaledTime + 0.1f;
+
                 foreach (Placed item in _objects.Values.Where(value => value.State.Dynamic && value.Root).ToArray())
                 {
                     Transform transform = item.Root.transform;
                     Vector3 position = transform.position;
                     Quaternion rotation = transform.rotation;
+
                     if (!SandboxWorld.Point(position).Valid() || position.y < -5000)
                     {
                         Remove(item.State.Id);
+
                         _world.Send(_world.Message(SandboxKind.Delete) with
                         {
                             Id = item.State.Id
                         });
+
                         continue;
                     }
 
@@ -845,6 +890,7 @@ namespace S3_NullServers.Sandbox
                         Position = SandboxWorld.Point(position),
                         Rotation = SandboxWorld.Rotation(rotation)
                     };
+
                     _world.Physics.Capture(item.State.Id, 255, position, rotation);
                 }
             }
@@ -852,6 +898,7 @@ namespace S3_NullServers.Sandbox
             if (_selecting)
             {
                 Camera view = Camera.main;
+
                 if (_outline)
                 {
                     _outline.SetActive(false);
@@ -859,19 +906,24 @@ namespace S3_NullServers.Sandbox
 
                 if (view && Surface(new Ray(view.transform.position, view.transform.forward), 120f, out var hovered))
                 {
-                    Placed item = _objects.Values.FirstOrDefault(value => value.Root &&
+                    Placed item = 
+                        _objects.Values.FirstOrDefault(value => value.Root &&
                         (hovered.transform == value.Root.transform ||
                         hovered.transform.IsChildOf(value.Root.transform)));
+
                     if (item != null)
                     {
-                        Frame(
+                        Frame
+                        (
                             SandboxAssets.BoundsOf(item.Root),
                             SandboxMessage.CanEdit(item.State.Owner, _world.LocalId, _world.IsAdmin) ?
-                        new Color(0.2f, 0.85f, 1f) : new Color(1f, 0.35f, 0.25f));
+                            new Color(0.2f, 0.85f, 1f) : new Color(1f, 0.35f, 0.25f)
+                        );
                     }
                 }
 
                 HandleInput();
+
                 return;
             }
 
@@ -888,10 +940,7 @@ namespace S3_NullServers.Sandbox
             }
 
             Camera camera = Camera.main;
-            if (!camera)
-            {
-                return;
-            }
+            if (!camera) return;
 
             bool inWorld = Cursor.lockState == CursorLockMode.Locked;
             _hasSurface = _editing;
@@ -900,10 +949,13 @@ namespace S3_NullServers.Sandbox
                 PositionPreview(camera);
             }
 
-            _ghost.transform.SetPositionAndRotation(
+            _ghost.transform.SetPositionAndRotation
+            (
                 SandboxWorld.Vector(_draft.Position),
-                SandboxWorld.Quaternion(_draft.Rotation));
+                SandboxWorld.Quaternion(_draft.Rotation)
+            );
             _ghost.transform.localScale = Vector3.Scale(_ghostBaseScale, SandboxWorld.Vector(_draft.Scale));
+
             Bounds previewBounds = SandboxAssets.BoundsOf(_ghost);
             if (!_editing && previewBounds.Contains(camera.transform.position))
             {
@@ -922,6 +974,7 @@ namespace S3_NullServers.Sandbox
 
             ColorUtility.TryParseHtmlString(_draft.Color, out var tint);
             _ghostMaterial.color = _hasSurface ? new Color(tint.r, tint.g, tint.b, 0.35f) : new Color(1f, 0.2f, 0.2f, 0.35f);
+
             if (!string.IsNullOrEmpty(_draft.Texture))
             {
                 _ghostMaterial.mainTexture = _world.Assets.Textures.Get(_draft.Texture);
@@ -935,7 +988,10 @@ namespace S3_NullServers.Sandbox
 
             if (Input.GetKeyDown(KeyCode.Q) || Input.GetKeyDown(KeyCode.E))
             {
-                Vector3 axis = Input.GetKey(KeyCode.LeftAlt) ? Vector3.forward : Input.GetKey(KeyCode.LeftShift) ? Vector3.right : Vector3.up;
+                Vector3 axis = Input.GetKey(KeyCode.LeftAlt) ? 
+                    Vector3.forward : 
+                    Input.GetKey(KeyCode.LeftShift) ? Vector3.right : Vector3.up;
+
                 _draft = _draft with
                 {
                     Rotation = SandboxWorld.Rotation(SandboxWorld.Quaternion(_draft.Rotation) *
@@ -957,6 +1013,7 @@ namespace S3_NullServers.Sandbox
             _ghost.transform.localScale = Vector3.Scale(_ghostBaseScale, SandboxWorld.Vector(_draft.Scale));
             _ghost.transform.rotation = SandboxWorld.Quaternion(_draft.Rotation);
             _ghost.transform.position = Vector3.zero;
+
             Bounds bounds = SandboxAssets.BoundsOf(_ghost);
             Vector3 normal = hit.normal;
             Vector3 point = hit.point;
@@ -969,9 +1026,12 @@ namespace S3_NullServers.Sandbox
                     forward = Vector3.ProjectOnPlane(camera.transform.up, Vector3.up).normalized;
                 }
 
-                float clearance = Mathf.Max(
+                float clearance = Mathf.Max
+                (
                     2f,
-                    Mathf.Abs(forward.x) * bounds.extents.x + Mathf.Abs(forward.z) * bounds.extents.z + 0.8f);
+                    Mathf.Abs(forward.x) * bounds.extents.x + Mathf.Abs(forward.z) * bounds.extents.z + 0.8f
+                );
+
                 if (Vector3.ProjectOnPlane(point - origin, Vector3.up).magnitude < clearance)
                 {
                     Vector3 ahead = origin + forward * clearance;
@@ -988,6 +1048,7 @@ namespace S3_NullServers.Sandbox
 
             float support = Mathf.Abs(normal.x) * bounds.extents.x + Mathf.Abs(normal.y) * bounds.extents.y + Mathf.Abs(normal.z) * bounds.extents.z;
             Vector3 position = point + normal * (support + 0.005f) - bounds.center;
+
             _draft = _draft with
             {
                 Position = SandboxWorld.Point(position)
@@ -998,7 +1059,12 @@ namespace S3_NullServers.Sandbox
 
         internal void Pose(PhysicsPose pose, int sequence)
         {
-            if (!_objects.TryGetValue(pose.Id, out var item) || !item.State.Dynamic || sequence <= item.Sequence)
+            if 
+            (
+                !_objects.TryGetValue(pose.Id, out var item) || 
+                !item.State.Dynamic || 
+                sequence <= item.Sequence
+            )
             {
                 return;
             }
@@ -1010,12 +1076,15 @@ namespace S3_NullServers.Sandbox
 
         internal void Pose(SandboxMessage message)
         {
-            if (!_objects.TryGetValue(message.Id, out var item) ||
+            if 
+            (
+                !_objects.TryGetValue(message.Id, out var item) ||
                 !item.State.Dynamic ||
                 message.Sequence <= item.Sequence ||
                 !SandboxPose.TryDecode(message.Data, out var offset, out var values) ||
                 offset != 0 ||
-                values.Length != 7)
+                values.Length != 7
+            )
             {
                 return;
             }

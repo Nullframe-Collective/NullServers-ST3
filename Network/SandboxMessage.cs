@@ -1,9 +1,9 @@
-using S3_NullServers.Customization;
-using S3_NullServers.Room;
+using NullServers.Customization;
+using NullServers.Room;
 using System.Text;
 using System.Text.Json;
 
-namespace S3_NullServers.Network
+namespace NullServers.Network
 {
     internal enum SandboxKind
     {
@@ -48,7 +48,8 @@ namespace S3_NullServers.Network
     {
         internal bool Valid(float limit = 50000f)
         {
-            return float.IsFinite(X) &&
+            return 
+                float.IsFinite(X) &&
                 float.IsFinite(Y) &&
                 float.IsFinite(Z) &&
                 Math.Abs(X) <= limit &&
@@ -59,14 +60,16 @@ namespace S3_NullServers.Network
 
     internal sealed record Rotation4(float X, float Y, float Z, float W)
     {
-        internal bool Valid => float.IsFinite(X) &&
+        internal bool Valid => 
+            float.IsFinite(X) &&
             float.IsFinite(Y) &&
             float.IsFinite(Z) &&
             float.IsFinite(W) &&
             X * X + Y * Y + Z * Z + W * W is > 0.95f and < 1.05f;
     }
 
-    internal sealed record BuildingObject(
+    internal sealed record BuildingObject
+    (
         int Id,
         int Owner,
         string Asset,
@@ -76,9 +79,11 @@ namespace S3_NullServers.Network
         string Color,
         string Texture,
         bool Dynamic,
-        int Revision = 0)
+        int Revision = 0
+    )
     {
-        internal bool Valid => Id >= 0 &&
+        internal bool Valid => 
+            Id >= 0 &&
             Owner >= 0 &&
             Revision >= 0 &&
             Asset is { Length: > 0 and <= 192 } &&
@@ -94,16 +99,19 @@ namespace S3_NullServers.Network
 
     internal sealed record PlayerEffects(int Id, float Scale = 1f, bool Fly = false, bool Frozen = false, bool Invincible = false);
 
-    internal sealed record SandboxCommand(
+    internal sealed record SandboxCommand
+    (
         PlayerCommand Action,
         int Target,
         float Value = 0f,
         string Text = null,
-        Point3 Position = null);
+        Point3 Position = null
+    );
 
     internal sealed record RagdollDefinition(int Id, string Name, Point3 Position, string[] Bones, int Player = -1);
 
-    internal sealed record GunState(
+    internal sealed record GunState
+    (
         int Player,
         bool Equipped,
         int Holding = 0,
@@ -112,9 +120,11 @@ namespace S3_NullServers.Network
         bool Throw = false,
         bool Freeze = false,
         int Sequence = 0,
-        Point3 Grip = null)
+        Point3 Grip = null
+    )
     {
-        internal bool Valid => Player is >= 0 and <= 4095 &&
+        internal bool Valid => 
+            Player is >= 0 and <= 4095 &&
             Holding is >= 0 and < 1000000 &&
             Sequence >= 0 &&
             (Position == null || Position.Valid()) &&
@@ -122,7 +132,8 @@ namespace S3_NullServers.Network
             (Grip == null || Grip.Valid(1000f));
     }
 
-    internal sealed record SandboxMessage(
+    internal sealed record SandboxMessage
+    (
         int Version,
         string Room,
         int RoomObject,
@@ -135,7 +146,8 @@ namespace S3_NullServers.Network
         int Id = 0,
         int Sequence = 0,
         string Data = null,
-        GunState Gun = null)
+        GunState Gun = null
+    )
     {
         internal const ushort BroadcastId = 0x4E49;
         internal const int MaxBytes = 16384;
@@ -151,6 +163,7 @@ namespace S3_NullServers.Network
         internal static bool TryParse(string json, out SandboxMessage message)
         {
             message = null;
+
             if (string.IsNullOrEmpty(json) || Encoding.UTF8.GetByteCount(json) > MaxBytes)
             {
                 return false;
@@ -159,7 +172,9 @@ namespace S3_NullServers.Network
             try
             {
                 SandboxMessage value = JsonSerializer.Deserialize<SandboxMessage>(json);
-                if (value == null ||
+                if 
+                (
+                    value == null ||
                     value.Version != 1 ||
                     value.Room is not { Length: > 0 and <= 64 } ||
                     value.RoomObject < 0 ||
@@ -189,12 +204,15 @@ namespace S3_NullServers.Network
                     ragdoll.Position?.Valid() != true ||
                     ragdoll.Bones is not { Length: > 0 and <= 64 } ||
                     ragdoll.Bones.Any(path => path == null || path.Length > 256) ||
-                    ragdoll.Bones.Distinct().Count() != ragdoll.Bones.Length))
+                    ragdoll.Bones.Distinct().Count() != ragdoll.Bones.Length)
+                )
                 {
                     return false;
                 }
 
-                if (value.Kind is SandboxKind.Create or SandboxKind.Edit or SandboxKind.Object &&
+                if 
+                (
+                    value.Kind is SandboxKind.Create or SandboxKind.Edit or SandboxKind.Object &&
                     value.Object == null ||
                     value.Kind == SandboxKind.Admin &&
                     value.Command == null ||
@@ -207,12 +225,14 @@ namespace S3_NullServers.Network
                     value.Kind is SandboxKind.GunState or SandboxKind.GunAim or SandboxKind.GunGrab or SandboxKind.GunRelease &&
                     value.Gun == null ||
                     value.Kind == SandboxKind.GunAim &&
-                    (value.Gun.Position == null || value.Gun.Rotation == null))
+                    (value.Gun.Position == null || value.Gun.Rotation == null)
+                )
                 {
                     return false;
                 }
 
                 message = value;
+
                 return true;
             }
             catch (JsonException)
@@ -234,11 +254,14 @@ namespace S3_NullServers.Network
             byte[] bytes = new byte[2 + values.Count * 4];
             bytes[0] = (byte)offset;
             bytes[1] = (byte)(values.Count / 7);
+
             for (int index = 0; index < values.Count; index++)
             {
-                System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(
+                System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian
+                (
                     bytes.AsSpan(2 + index * 4),
-                    BitConverter.SingleToInt32Bits(values[index]));
+                    BitConverter.SingleToInt32Bits(values[index])
+                );
             }
 
             return Convert.ToBase64String(bytes);
@@ -248,17 +271,18 @@ namespace S3_NullServers.Network
         {
             offset = 0;
             values = null;
-            if (data == null || data.Length > 604)
-            {
-                return false;
-            }
+
+            if (data == null || data.Length > 604) return false;
 
             Span<byte> bytes = stackalloc byte[450];
-            if (!Convert.TryFromBase64String(data, bytes, out var count) ||
+            if 
+            (
+                !Convert.TryFromBase64String(data, bytes, out var count) ||
                 count < 30 ||
                 bytes[1] is < 1 or > 16 ||
                 bytes[0] + bytes[1] > 64 ||
-                count != 2 + bytes[1] * 28)
+                count != 2 + bytes[1] * 28
+            )
             {
                 return false;
             }
@@ -283,6 +307,7 @@ namespace S3_NullServers.Network
 
             offset = bytes[0];
             values = decoded;
+
             return true;
         }
     }

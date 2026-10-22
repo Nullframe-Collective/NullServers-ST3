@@ -1,4 +1,4 @@
-namespace S3_NullServers.Network
+namespace NullServers.Network
 {
     internal enum RpcCategory
     {
@@ -30,12 +30,11 @@ namespace S3_NullServers.Network
             {
                 _tokens = Math.Min(_capacity, _tokens + Math.Max(0, now - _updated) * _rate);
                 _updated = Math.Max(now, _updated);
-                if (amount > _tokens)
-                {
-                    return false;
-                }
+
+                if (amount > _tokens) return false;
 
                 _tokens -= amount;
+
                 return true;
             }
         }
@@ -78,7 +77,6 @@ namespace S3_NullServers.Network
             if (!_methods.TryGetValue(key, out var bucket))
             {
                 var (rate, burst) = category switch
-
                 {
                     RpcCategory.Chat => (3, 10),
                     RpcCategory.Appearance => (5, 12),
@@ -87,6 +85,7 @@ namespace S3_NullServers.Network
                     RpcCategory.Broadcast => (20, 50),
                     _ => (200, 400)
                 };
+
                 _methods[key] = bucket = new Bucket(rate, burst, now);
             }
 
@@ -112,10 +111,7 @@ namespace S3_NullServers.Network
                 _burstDrops = 0;
             }
 
-            if (++_burstDrops >= 64)
-            {
-                return true;
-            }
+            if (++_burstDrops >= 64) return true;
 
             long second = (long)Math.Floor(now);
             if (second != _dropSecond)

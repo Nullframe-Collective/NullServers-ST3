@@ -3,7 +3,7 @@ using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using UnityEngine;
 
-namespace S3_NullServers.Customization
+namespace NullServers.Customization
 {
     internal sealed class AppearanceVisual : IDisposable
     {
@@ -21,28 +21,32 @@ namespace S3_NullServers.Customization
         private Appearance _applied;
         private Texture2D[] _images;
 
-        internal AppearanceVisual(
+        internal AppearanceVisual
+        (
             SyncCustomization source,
             Func<Transform, Transform> map = null,
-            IReadOnlyDictionary<IntPtr, Material[]> defaults = null)
+            IReadOnlyDictionary<IntPtr, Material[]> defaults = null
+        )
         {
             _preview = map != null;
-            Transform Node(Transform value) => value && map != null ? map(value) : value;
 
+            Transform Node(Transform value) => value && map != null ? map(value) : value;
             Renderer SurfaceFor(Renderer value) => value && map != null ? Node(value.transform)?.GetComponent(Il2CppType.Of<Renderer>())?.Cast<Renderer>() : value;
 
             _head = SurfaceFor(source.KAMAAAJBLLG);
             _headForceOff = _head && _head.forceRenderingOff;
             _headEnabled = _preview || _head && _head.enabled;
             _skinHead = SurfaceFor(source.EKMFOOLPMCC);
-            _parts = new[]
-            {
-                new[] { _skinHead },
-                new[] { SurfaceFor(source.NGBLPBOAANH) },
-                new[] { SurfaceFor(source.DCBPBGEFBHD), SurfaceFor(source.FFDDAKMAHKI) },
-                new[] { SurfaceFor(source.JCGAKKLDCKJ), SurfaceFor(source.IIGKOHECBEL) }
-            };
+            _parts =
+            [
+                [_skinHead],
+                [SurfaceFor(source.NGBLPBOAANH)],
+                [SurfaceFor(source.DCBPBGEFBHD), SurfaceFor(source.FFDDAKMAHKI)],
+                [SurfaceFor(source.JCGAKKLDCKJ), SurfaceFor(source.IIGKOHECBEL)]
+            ];
+
             _hats = Enumerable.Range(0, source.GKCNMADGAAF.Count).Select(index => Node(source.GKCNMADGAAF[index])).ToArray();
+
             foreach (Renderer renderer in _parts.Skip(1).SelectMany(part => part).Where(renderer => renderer))
             {
                 _fur.Add(renderer.Pointer);
@@ -57,14 +61,13 @@ namespace S3_NullServers.Customization
             foreach (Renderer renderer in renderers)
             {
                 Material[] current = renderer.sharedMaterials.ToArray();
-                if (current.Length == 0)
-                {
-                    continue;
-                }
+                if (current.Length == 0) continue;
 
                 Material[] originals = defaults != null && defaults.TryGetValue(renderer.Pointer, out var baseline) ? baseline : current;
                 Material[] materials = current.Select(material => material ? new Material(material) : null).ToArray();
+
                 renderer.sharedMaterials = new Il2CppReferenceArray<Material>(materials);
+
                 // Unity can instantiate shared materials on the next materials getter, so retain the renderer-owned instances.
                 Material[] owned = renderer.materials.ToArray();
                 foreach (Material material in materials)
@@ -83,6 +86,7 @@ namespace S3_NullServers.Customization
         {
             string[] urls = appearance.Urls;
             Texture2D[] images = urls.Select(url => appearance.UseSkin ? textures.Get(url) : null).ToArray();
+
             if (_applied?.SameLook(appearance) == true && _images != null && images.SequenceEqual(_images))
             {
                 return;
@@ -90,7 +94,8 @@ namespace S3_NullServers.Customization
 
             _applied = appearance;
             _images = images;
-            ColorUtility.TryParseHtmlString(appearance.FurColor, out var fur);
+            ColorUtility.TryParseHtmlString(appearance.FurColor, out Color fur);
+
             for (int index = 0; index < _hats.Length; index++)
             {
                 if (_hats[index])
@@ -101,10 +106,7 @@ namespace S3_NullServers.Customization
 
             foreach (Surface surface in _surfaces)
             {
-                if (!surface.Renderer || !surface.Materials[0])
-                {
-                    continue;
-                }
+                if (!surface.Renderer || !surface.Materials[0]) continue;
 
                 Material material = surface.Materials[0];
                 if (surface.Originals[0])
@@ -136,38 +138,33 @@ namespace S3_NullServers.Customization
 
             for (int part = 0; part < images.Length; part++)
             {
-                if (images[part])
+                if (!images[part]) continue;
+
+                foreach (Renderer renderer in _parts[part])
                 {
-                    foreach (Renderer renderer in _parts[part])
+                    if (!renderer) continue;
+
+                    Material material = _surfaces.FirstOrDefault(surface => surface.Renderer == renderer)?.Materials[0];
+                    if (!material) continue;
+
+                    if (part != 0)
                     {
-                        if (renderer)
+                        Shader shader = Shader.Find("Diffuse");
+                        if (shader)
                         {
-                            Material material = _surfaces.FirstOrDefault(surface => surface.Renderer == renderer)?.Materials[0];
-                            if (!material)
-                            {
-                                continue;
-                            }
-
-                            if (part != 0)
-                            {
-                                Shader shader = Shader.Find("Diffuse");
-                                if (shader)
-                                {
-                                    material.shader = shader;
-                                }
-                            }
-
-                            material.mainTexture = images[part];
-                            if (part != 0)
-                            {
-                                material.color = Color.white;
-                            }
-
-                            if (material.HasProperty("_TopMainTex"))
-                            {
-                                material.SetTexture("_TopMainTex", images[part]);
-                            }
+                            material.shader = shader;
                         }
+                    }
+
+                    material.mainTexture = images[part];
+                    if (part != 0)
+                    {
+                        material.color = Color.white;
+                    }
+
+                    if (material.HasProperty("_TopMainTex"))
+                    {
+                        material.SetTexture("_TopMainTex", images[part]);
                     }
                 }
             }
@@ -177,10 +174,9 @@ namespace S3_NullServers.Customization
         {
             for (int index = 0; index < _hats.Length; index++)
             {
-                if (_hats[index])
-                {
-                    _hats[index].gameObject.SetActive(index == appearance.Hat);
-                }
+                if (!_hats[index]) continue;
+
+                _hats[index].gameObject.SetActive(index == appearance.Hat);
             }
 
             _applied = appearance;
@@ -204,10 +200,9 @@ namespace S3_NullServers.Customization
 
                 foreach (Material material in surface.Materials)
                 {
-                    if (material)
-                    {
-                        UnityEngine.Object.Destroy(material);
-                    }
+                    if (!material) continue;
+
+                    UnityEngine.Object.Destroy(material);
                 }
             }
 

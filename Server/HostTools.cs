@@ -3,7 +3,7 @@ using Il2Cpp;
 using Il2CppFishNet.Object;
 using UnityEngine;
 
-namespace S3_NullServers.Server
+namespace NullServers.Server
 {
     internal sealed class HostTools
     {
@@ -16,6 +16,7 @@ namespace S3_NullServers.Server
         {
             _instance = this;
             _control = control;
+
             harmony.Patch(
                 AccessTools.Method(typeof(Volume), nameof(Volume.OnStartServer)),
                 prefix: new HarmonyMethod(typeof(HostTools), nameof(BeforeConsoleStart)));
@@ -23,7 +24,8 @@ namespace S3_NullServers.Server
 
         private static bool BeforeConsoleStart(Volume __instance)
         {
-            return !(_instance._placingConsole || (_instance._console && __instance.NetworkObject == _instance._console)) ||
+            return 
+                !(_instance._placingConsole || (_instance._console && __instance.NetworkObject == _instance._console)) ||
                 !_instance._control.CanManage ||
                 RoomProperties.Current.GameMode == "SBX";
         }
@@ -31,27 +33,33 @@ namespace S3_NullServers.Server
         internal bool SpawnConsole(out string error)
         {
             error = "Only the host can spawn the sandbox console.";
+
             RoomMultiplayerMenu menu = RoomMultiplayerMenu.GJDGDIGECJN;
             if (!_control.CanManage || _control.Busy || !menu || !menu.CJNLEDLNGID)
             {
                 return false;
             }
 
-            NetworkObject existing = UnityEngine.Object.FindObjectsOfType<NetworkObject>()
+            NetworkObject existing = 
+                UnityEngine.Object.FindObjectsOfType<NetworkObject>()
                 .FirstOrDefault(networkObject => networkObject.IsServerInitialized &&
                 networkObject.gameObject.scene == menu.gameObject.scene &&
                 networkObject.name.StartsWith("Wemon", StringComparison.Ordinal));
+
             if (existing)
             {
                 error = "The sandbox console is already present on this map.";
+
                 return false;
             }
 
             _placingConsole = true;
+
             try
             {
                 _console = CPPBDGGKHCB.FONDGACBGAB("Wemon", menu.transform.position, menu.transform.rotation, null);
                 error = _console ? null : "The sandbox console could not be spawned.";
+
                 return _console;
             }
             finally

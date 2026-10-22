@@ -8,7 +8,7 @@ namespace System.Runtime.CompilerServices
 
         public NullableAttribute(byte value)
         {
-            NullableFlags = new[] { value };
+            NullableFlags = [value];
         }
 
         public NullableAttribute(byte[] values)

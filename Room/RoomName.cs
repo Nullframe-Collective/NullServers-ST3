@@ -1,7 +1,7 @@
 using System.Text;
 using System.Text.Json;
 
-namespace S3_NullServers.Room
+namespace NullServers.Room
 {
     internal static class RoomName
     {
@@ -38,20 +38,20 @@ namespace S3_NullServers.Room
             plain = display = null;
             error = "Enter a room name.";
             text = text?.Trim();
-            if (string.IsNullOrEmpty(text))
-            {
-                return false;
-            }
+
+            if (string.IsNullOrEmpty(text)) return false;
 
             if (Encoding.UTF8.GetByteCount(text) > MaxDisplayBytes)
             {
                 error = "The formatted name is too long (512 UTF-8 bytes maximum).";
+
                 return false;
             }
 
             StringBuilder visible = new();
             StringBuilder formatted = new();
             int depth = 0;
+
             for (int index = 0; index < text.Length; index++)
             {
                 char character = text[index];
@@ -62,22 +62,28 @@ namespace S3_NullServers.Room
                         depth--;
                         formatted.Append("</color>");
                         index += 7;
+
                         continue;
                     }
 
                     int end = text.IndexOf('>', index);
-                    if (end > index + 7 &&
+                    if 
+                    (
+                        end > index + 7 &&
                         text.AsSpan(index).StartsWith("<color=", StringComparison.OrdinalIgnoreCase) &&
                         TryColor(text.Substring(index + 7, end - index - 7), out var color) &&
-                        depth < 8)
+                        depth < 8
+                    )
                     {
                         depth++;
                         formatted.Append("<color=").Append(color).Append('>');
                         index = end;
+
                         continue;
                     }
 
                     error = "Use matching <color=#RRGGBB> and </color> tags only.";
+
                     return false;
                 }
 
@@ -85,12 +91,14 @@ namespace S3_NullServers.Room
                 {
                     visible.Append(character).Append(text[index + 1]);
                     formatted.Append(character).Append(text[++index]);
+
                     continue;
                 }
 
                 if (character == '>' || character == '|' || char.IsControl(character) || char.IsSurrogate(character))
                 {
                     error = "The name contains an unsupported character.";
+
                     return false;
                 }
 
@@ -101,6 +109,7 @@ namespace S3_NullServers.Room
             if (depth != 0)
             {
                 error = "Close every color tag with </color>.";
+
                 return false;
             }
 
@@ -108,6 +117,7 @@ namespace S3_NullServers.Room
             if (plain.Length == 0 || Encoding.UTF8.GetByteCount(plain) > MaxBytes)
             {
                 error = "The visible name must contain 1–64 UTF-8 bytes.";
+
                 return false;
             }
 
@@ -115,32 +125,37 @@ namespace S3_NullServers.Room
             if (Encoding.UTF8.GetByteCount(display) > MaxDisplayBytes)
             {
                 error = "The formatted name is too long (512 UTF-8 bytes maximum).";
+
                 return false;
             }
 
             error = null;
+
             return true;
         }
 
         private static bool TryColor(string value, out string color)
         {
             color = null;
+
             if (RoomOptions.IsValidColor(value))
             {
                 color = value.ToUpperInvariant();
             }
             else if (value.Length == 4 && value[0] == '#' && value.Skip(1).All(Uri.IsHexDigit))
             {
-                color = new string(new[]
-                {
-                    '#',
-                    value[1],
-                    value[1],
-                    value[2],
-                    value[2],
-                    value[3],
-                    value[3]
-                }).ToUpperInvariant();
+                color = new string
+                (
+                    [
+                        '#',
+                        value[1],
+                        value[1],
+                        value[2],
+                        value[2],
+                        value[3],
+                        value[3]
+                    ]
+                ).ToUpperInvariant();
             }
             else
             {
@@ -157,18 +172,19 @@ namespace S3_NullServers.Room
                 try
                 {
                     using var document = JsonDocument.Parse(data);
-                    if (document.RootElement.ValueKind == JsonValueKind.Object &&
+                    if 
+                    (
+                        document.RootElement.ValueKind == JsonValueKind.Object &&
                         document.RootElement.TryGetProperty("DisplayName", out var value) &&
                         value.ValueKind == JsonValueKind.String &&
                         TryParse(value.GetString(), out var name, out var display, out _) &&
-                        name == plain)
+                        name == plain
+                    )
                     {
                         return display;
                     }
                 }
-                catch (JsonException)
-                {
-                }
+                catch (JsonException) { }
             }
 
             return (plain ?? "").Replace('<', '‹').Replace('>', '›');

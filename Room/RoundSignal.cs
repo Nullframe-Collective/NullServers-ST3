@@ -1,47 +1,24 @@
 using System.Text;
 using System.Text.Json;
 
-namespace S3_NullServers.Room
+namespace NullServers.Room
 {
     internal sealed class RoundSignal
     {
         internal const ushort BroadcastId = 0x4E47;
         internal const int MaxBytes = 1024;
 
-        public int Version
-        {
-            get;
-        }
-        public string RoomId
-        {
-            get;
-        }
-        public string Revision
-        {
-            get;
-        }
-        public string Scene
-        {
-            get;
-        }
-        public bool Ready
-        {
-            get;
-        }
-        public int ObjectId
-        {
-            get;
-        }
-        public bool Missing
-        {
-            get;
-        }
-        public ulong SceneId
-        {
-            get;
-        }
+        public int Version { get; }
+        public string RoomId { get; }
+        public string Revision { get; }
+        public string Scene { get; }
+        public bool Ready { get; }
+        public int ObjectId { get; }
+        public bool Missing { get; }
+        public ulong SceneId { get; }
 
-        public RoundSignal(
+        public RoundSignal
+        (
             int version,
             string roomId,
             string revision,
@@ -49,7 +26,8 @@ namespace S3_NullServers.Room
             bool ready,
             int objectId,
             bool missing = false,
-            ulong sceneId = 0)
+            ulong sceneId = 0
+        )
         {
             Version = version;
             RoomId = roomId;
@@ -64,6 +42,7 @@ namespace S3_NullServers.Room
         internal static bool TryParse(string json, out RoundSignal signal)
         {
             signal = null;
+
             if (string.IsNullOrEmpty(json) || Encoding.UTF8.GetByteCount(json) > MaxBytes)
             {
                 return false;
@@ -72,7 +51,9 @@ namespace S3_NullServers.Room
             try
             {
                 RoundSignal value = JsonSerializer.Deserialize<RoundSignal>(json);
-                if (value == null ||
+                if 
+                (
+                    value == null ||
                     value.Version != 1 ||
                     string.IsNullOrEmpty(value.RoomId) ||
                     value.RoomId.Length > 64 ||
@@ -84,12 +65,14 @@ namespace S3_NullServers.Room
                     value.Scene.Any(char.IsControl) ||
                     value.ObjectId < -1 ||
                     (value.Ready && (value.ObjectId < 0 || value.Missing)) ||
-                    (value.Missing && (value.ObjectId < 0 || value.SceneId == 0)))
+                    (value.Missing && (value.ObjectId < 0 || value.SceneId == 0))
+                )
                 {
                     return false;
                 }
 
                 signal = value;
+
                 return true;
             }
             catch (JsonException)

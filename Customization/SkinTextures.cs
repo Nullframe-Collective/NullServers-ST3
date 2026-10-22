@@ -1,8 +1,8 @@
-using S3_NullServers.Additional;
+using NullServers.Additional;
 using UnityEngine;
 using UnityEngine.Networking;
 
-namespace S3_NullServers.Customization
+namespace NullServers.Customization
 {
     internal sealed class SkinTextures : IDisposable
     {
@@ -23,10 +23,7 @@ namespace S3_NullServers.Customization
 
         internal Texture2D Get(string url)
         {
-            if (!Appearance.ValidUrl(url) || string.IsNullOrEmpty(url))
-            {
-                return null;
-            }
+            if (!Appearance.ValidUrl(url) || string.IsNullOrEmpty(url)) return null;
 
             if (!_downloads.TryGetValue(url, out var download))
             {
@@ -40,6 +37,7 @@ namespace S3_NullServers.Customization
         internal void Update()
         {
             int active = _downloads.Values.Count(download => download.Request != null);
+
             foreach (var pair in _downloads.ToArray())
             {
                 Download download = pair.Value;
@@ -54,20 +52,15 @@ namespace S3_NullServers.Customization
 
                     _textureBytes -= download.Bytes;
                     _downloads.Remove(pair.Key);
+
                     continue;
                 }
 
-                if (download.Finished)
-                {
-                    continue;
-                }
+                if (download.Finished) continue;
 
                 if (download.Request == null)
                 {
-                    if (active >= 4)
-                    {
-                        continue;
-                    }
+                    if (active >= 4) continue;
 
                     try
                     {
@@ -82,6 +75,7 @@ namespace S3_NullServers.Customization
                         download.Request = null;
                         download.Error = "Cannot load skin image: " + exception.Message;
                         download.Finished = true;
+
                         continue;
                     }
 
@@ -95,10 +89,7 @@ namespace S3_NullServers.Customization
                     download.Error = "Skin image exceeds 8 MB.";
                 }
 
-                if (!request.isDone)
-                {
-                    continue;
-                }
+                if (!request.isDone) continue;
 
                 if (download.Error == null && request.result == UnityWebRequest.Result.Success)
                 {
@@ -110,6 +101,7 @@ namespace S3_NullServers.Customization
                         download.Request = null;
                         download.Finished = true;
                         active--;
+
                         continue;
                     }
 

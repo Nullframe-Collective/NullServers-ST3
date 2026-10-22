@@ -1,11 +1,11 @@
 using Il2Cpp;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
-using S3_NullServers.Network;
-using S3_NullServers.Room;
-using S3_NullServers.Server;
+using NullServers.Network;
+using NullServers.Room;
+using NullServers.Server;
 using UnityEngine;
 
-namespace S3_NullServers.UI
+namespace NullServers.UI
 {
     internal sealed class ServerSettings
     {
@@ -45,18 +45,22 @@ namespace S3_NullServers.UI
             _control = control;
             _picker = picker;
             _pause = pause;
+
             pause.Add("Server Settings", Open, () => _control.Access.CanOpen);
         }
 
         internal void Update()
         {
             RoomMultiplayerMenu menu = RoomMultiplayerMenu.GJDGDIGECJN;
-            if (_open &&
+            if 
+            (
+                _open &&
                 (!_control.Access.CanOpen ||
                 !menu ||
                 menu != _menu ||
                 !menu.IOMIAHNBDOG ||
-                _control.Room.Id != _roomId))
+                _control.Room.Id != _roomId)
+            )
             {
                 Close();
             }
@@ -64,17 +68,16 @@ namespace S3_NullServers.UI
 
         private void Open()
         {
-            if (!_control.Access.CanOpen || !_pause.Hide(this))
-            {
-                return;
-            }
+            if (!_control.Access.CanOpen || !_pause.Hide(this)) return;
 
             _menu = _pause.Menu;
+
             Il2CppFishNet.Transporting.Relay.RelayRoomInfo room = _control.Room;
             _roomId = room.Id;
             _name = RoomName.ReadDisplay(room.RoomData, room.Name);
             _capacity = room.MaxPlayers.ToString();
             _color = RoomOptions.ReadNameColor(room.RoomData) ?? "#FFFFFF";
+
             RoomProperties properties = RoomProperties.HFBENCJFGPO(room.RoomData);
             _scene = properties.MapName;
             _mode = properties.GameMode;
@@ -82,6 +85,7 @@ namespace S3_NullServers.UI
             _custards = properties.Custards.ToString();
             _difficulty = properties.Difficulty;
             _muteGuests = properties.MuteGuests;
+
             _message = null;
             _mapExpanded = _modeExpanded = false;
             _scroll = default;
@@ -97,10 +101,7 @@ namespace S3_NullServers.UI
 
         internal void Draw()
         {
-            if (!_open || !_menu || !_control.Access.CanOpen)
-            {
-                return;
-            }
+            if (!_open || !_menu || !_control.Access.CanOpen) return;
 
             GUISkin oldSkin = GUI.skin;
             Color oldColor = GUI.color;
@@ -108,10 +109,12 @@ namespace S3_NullServers.UI
             Color oldBackgroundColor = GUI.backgroundColor;
             bool oldEnabled = GUI.enabled;
             int oldDepth = GUI.depth;
+
             GUI.depth = -100;
             GUI.skin = _menu.BIPMFIBNFBC;
             GUI.color = Color.white;
             GUI.contentColor = GUI.backgroundColor = Color.white;
+
             if (_label == null)
             {
                 _label = new GUIStyle(GUI.skin.label)
@@ -121,19 +124,22 @@ namespace S3_NullServers.UI
                     wordWrap = true,
                     alignment = TextAnchor.MiddleLeft
                 };
+
                 _rich = new GUIStyle(_label)
                 {
                     richText = true
                 };
+
                 _small = new GUIStyle(_label);
                 _title = new GUIStyle(_label);
+
                 _input = new GUIStyle(GUI.skin.textField)
                 {
                     font = GUI.skin.font,
                     richText = false
                 };
-                _button = new GUIStyle(GUI.skin.button)
 
+                _button = new GUIStyle(GUI.skin.button)
                 {
                     font = GUI.skin.font,
                     richText = false,
@@ -149,6 +155,7 @@ namespace S3_NullServers.UI
                 _button.onActive.background = _button.active.background;
                 _button.focused.background = _button.hover.background;
                 _button.onFocused.background = _button.active.background;
+
                 foreach (GUIStyleState state in new[]
                 {
                     _button.normal,
@@ -174,10 +181,14 @@ namespace S3_NullServers.UI
             _small.fontSize = Mathf.Max(13, fontSize - 3);
             _title.fontSize = fontSize + 5;
             _row = fontSize * 1.65f;
+
             float width = Mathf.Min(Screen.width * 0.78f, 1200f);
             _window = new Rect((Screen.width - width) / 2f, Screen.height * 0.09f, width, Screen.height * 0.82f);
             _picker.HandleInput();
-            if (_picker.IsOpen && Event.current.type != EventType.Repaint && Event.current.type != EventType.Layout)
+
+            if (_picker.IsOpen && 
+                Event.current.type != EventType.Repaint && 
+                Event.current.type != EventType.Layout)
             {
                 GUI.enabled = false;
             }
@@ -186,6 +197,7 @@ namespace S3_NullServers.UI
             GUI.DrawTexture(_window, Texture2D.whiteTexture);
             GUI.color = Color.white;
             GUI.BeginGroup(_window);
+
             try
             {
                 GUI.Label(new Rect(20f, 10f, width - 140f, _row), "Server Settings", _title);
@@ -194,23 +206,25 @@ namespace S3_NullServers.UI
                     Close();
                 }
 
-                string[] tabs = new[]
-                {
+                string[] tabs =
+                [
                     "Room",
                     "Round",
                     "Players",
                     "Bans",
                     "Chat"
-                };
+                ];
                 float tabWidth = (width - 40f) / tabs.Length;
+
                 for (int index = 0; index < tabs.Length; index++)
                 {
-                    if (GUI.Toggle(
+                    if (GUI.Toggle
+                    (
                         new Rect(20f + index * tabWidth, _row + 18f, tabWidth - 5f, _row),
                         _tab == index,
                         tabs[index],
-                        _button) &&
-                        _tab != index)
+                        _button
+                    ) && _tab != index)
                     {
                         _tab = index;
                         _scroll = default;
@@ -220,8 +234,8 @@ namespace S3_NullServers.UI
 
                 _viewport = new Rect(20f, _row * 2f + 30f, width - 40f, _window.height - _row * 4f - 50f);
                 _width = _viewport.width - 24f;
-                float contentRows = _tab switch
 
+                float contentRows = _tab switch
                 {
                     0 => 14f,
                     1 => 13 + (_mapExpanded ? _control.Maps.Count : 0) + (_modeExpanded ? _control.Modes.Count : 0),
@@ -229,10 +243,13 @@ namespace S3_NullServers.UI
                     3 => 3 + _control.Access.Bans.Count * 2,
                     _ => 3 + _control.Access.MutedAccounts.Count * 2
                 };
+
                 _scroll = GUI.BeginScrollView(_viewport, _scroll, new Rect(0f, 0f, _width, contentRows * _row));
+
                 try
                 {
                     GUI.enabled = GUI.enabled && !_control.Busy;
+
                     switch (_tab)
                     {
                         case 0:
@@ -258,15 +275,18 @@ namespace S3_NullServers.UI
                 }
 
                 GUI.enabled = oldEnabled;
-                GUI.Label(
+                GUI.Label
+                (
                     new Rect(20f, _window.height - _row * 1.8f, width - 40f, _row * 1.6f),
                     _message ?? _control.Access.Status ?? _control.Status ?? "Room management",
-                    _small);
+                    _small
+                );
             }
             finally
             {
                 GUI.EndGroup();
                 GUI.enabled = oldEnabled;
+
                 if (_open)
                 {
                     _picker.Draw(_menu.BIPMFIBNFBC);
@@ -283,32 +303,44 @@ namespace S3_NullServers.UI
         private void DrawRoom()
         {
             GUI.Label(Line(0f), "Room Name", _label);
+
             _name = GUI.TextField(Line(1f), _name, RoomName.MaxDisplayBytes, _input);
+
             bool valid = RoomName.TryParse(_name, out _, out var display, out var error);
             string previewColor = RoomOptions.IsValidColor(_color) ? _color : "#FFFFFF";
-            GUI.Label(
+            GUI.Label
+            (
                 new Rect(0f, _row * 2.2f, _width, _row * 1.5f),
                 valid ? $"<color={previewColor}>{display}</color>" : error,
-                valid ? _rich : _small);
+                valid ? _rich : _small
+            );
+
             GUI.Label(new Rect(0f, _row * 3.6f, _width, _row), "Partial color: <color=#FF5555>Red</color> White", _small);
+
             GUI.Label(new Rect(0f, _row * 4.8f, _width * 0.6f, _row), "Max Players (up to 50)", _label);
             _capacity = GUI.TextField(new Rect(_width * 0.7f, _row * 4.8f, _width * 0.3f, _row), _capacity, 2, _input);
+
             GUI.Label(new Rect(0f, _row * 6f, _width * 0.5f, _row), "Default Name Color", _label);
             _color = GUI.TextField(new Rect(_width * 0.52f, _row * 6f, _width * 0.48f - _row - 8f, _row), _color, 7, _input);
+
             Rect swatch = new(_width - _row, _row * 6f, _row, _row);
             if (ColorPicker.Swatch(swatch, previewColor))
             {
                 Action<string> updateColor = color => _color = color;
-                _picker.Open(
-                    new Rect(
+                _picker.Open
+                (
+                    new Rect
+                    (
                         _window.x + _viewport.x + swatch.x,
                         _window.y + _viewport.y + swatch.y - _scroll.y,
                         _row,
-                        _row),
+                        _row
+                    ),
                     previewColor,
                     updateColor,
                     updateColor,
-                    valid ? display : "Room Name");
+                    valid ? display : "Room Name"
+                );
             }
 
             if (GUI.Button(new Rect(0f, _row * 7.5f, _width, _row * 1.2f), "Apply Room Settings", _button))
@@ -338,10 +370,12 @@ namespace S3_NullServers.UI
 
             if (_control.CanManage)
             {
-                GUI.Label(
+                GUI.Label
+                (
                     new Rect(0f, _row * 12f, _width, _row * 1.5f),
                     $"Anti-Crash: ACTIVE · Blocked: {_control.Protection.Blocked} · Removed: {_control.Protection.Removed}",
-                    _small);
+                    _small
+                );
             }
         }
 
@@ -349,6 +383,7 @@ namespace S3_NullServers.UI
         {
             float y = 0f;
             GUI.Label(new Rect(0f, y, _width * 0.28f, _row), "Map", _label);
+
             if (GUI.Button(new Rect(_width * 0.3f, y, _width * 0.7f, _row), (_scene ?? "Choose map") + "  [v]", _button))
             {
                 _mapExpanded = !_mapExpanded;
@@ -370,10 +405,15 @@ namespace S3_NullServers.UI
             }
 
             GUI.Label(new Rect(0f, y, _width * 0.28f, _row), "Game Mode", _label);
-            if (GUI.Button(
-                new Rect(_width * 0.3f, y, _width * 0.7f, _row),
-                (_control.Modes.GetValueOrDefault(_mode ?? "") ?? _mode ?? "Choose mode") + "  [v]",
-                _button))
+            if
+            (
+                GUI.Button
+                (
+                    new Rect(_width * 0.3f, y, _width * 0.7f, _row),
+                    (_control.Modes.GetValueOrDefault(_mode ?? "") ?? _mode ?? "Choose mode") + "  [v]",
+                    _button
+                )
+            )
             {
                 _modeExpanded = !_modeExpanded;
             }
@@ -397,18 +437,25 @@ namespace S3_NullServers.UI
             y += _row * 1.2f;
             _custards = NumberField("Custards (1–200)", _custards, y);
             y += _row * 1.2f;
+
             GUI.Label(new Rect(0f, y, _width * 0.55f, _row), "Difficulty", _label);
-            string[] difficulty = new[]
-            {
+
+            string[] difficulty =
+            [
                 "Easy",
                 "Normal",
                 "Hard",
                 "Impossible"
-            };
-            if (GUI.Button(
-                new Rect(_width * 0.56f, y, _width * 0.44f, _row),
-                difficulty[Math.Clamp(_difficulty, 0, 3)],
-                _button))
+            ];
+            if
+            (
+                GUI.Button
+                (
+                    new Rect(_width * 0.56f, y, _width * 0.44f, _row),
+                    difficulty[Math.Clamp(_difficulty, 0, 3)],
+                    _button
+                )
+            )
             {
                 _difficulty = (_difficulty + 1) % difficulty.Length;
             }
@@ -421,11 +468,14 @@ namespace S3_NullServers.UI
             }
 
             y += _row * 1.4f;
-            GUI.Label(
+            GUI.Label
+            (
                 new Rect(0f, y, _width, _row * 1.5f),
                 "Starts a fresh round for everyone. Scores, teams and map objects reset.",
-                _small);
+                _small
+            );
             y += _row * 1.6f;
+
             if (GUI.Button(new Rect(0f, y, _width, _row * 1.2f), "Start New Round", _button))
             {
                 if (!int.TryParse(_minutes, out var minutes) || !int.TryParse(_custards, out var custards))
@@ -436,10 +486,8 @@ namespace S3_NullServers.UI
                 {
                     _control.RestartRound(_scene, _mode, minutes, custards, _difficulty, _muteGuests, out var message);
                     _message = message;
-                    if (message == null)
-                    {
-                        Close();
-                    }
+
+                    if (message == null) Close();
                 }
             }
         }
@@ -447,17 +495,23 @@ namespace S3_NullServers.UI
         private void DrawPlayers()
         {
             float y = 0f;
+
             foreach (RoomPlayer player in _control.Access.Players)
             {
                 int id = player.Id;
-                GUI.Label(
+                GUI.Label
+                (
                     new Rect(0f, y, _width * 0.6f, _row),
                     player.Nickname + (id == 0 ? " (Host)" : player.Trusted ? " (Admin)" : ""),
-                    _label);
-                GUI.Label(
+                    _label
+                );
+                GUI.Label
+                (
                     new Rect(0f, y + _row, _width * 0.6f, _row),
                     $"Account: {player.Account} · ID: {id}" + (player.Guest ? " · Guest" : ""),
-                    _small);
+                    _small
+                );
+
                 if (id != 0)
                 {
                     if (ActionButton(new Rect(_width * 0.64f, y, _width * 0.16f, _row), "KICK", new Color(1f, 0.65f, 0.2f)))
@@ -468,6 +522,7 @@ namespace S3_NullServers.UI
 
                     bool enabled = GUI.enabled;
                     GUI.enabled = enabled && !player.Guest;
+
                     if (ActionButton(new Rect(_width * 0.82f, y, _width * 0.18f, _row), "BAN", new Color(1f, 0.3f, 0.3f)))
                     {
                         _control.Kick(id, player.Account, true, out var message);
@@ -475,20 +530,27 @@ namespace S3_NullServers.UI
                     }
 
                     GUI.enabled = enabled;
-                    if (GUI.Button(
+                    if (GUI.Button
+                    (
                         new Rect(_width * 0.64f, y + _row * 1.1f, _width * 0.36f, _row),
                         player.Muted ? "UNMUTE CHAT" : "MUTE CHAT",
-                        _button))
+                        _button
+                    ))
                     {
                         _control.Access.SetMuted(id, player.Account, !player.Muted, out var message);
                         _message = message;
                     }
 
-                    if (_control.CanManage &&
-                        GUI.Button(
-                        new Rect(0f, y + _row * 2f, _width * 0.6f, _row * 0.85f),
-                        player.Trusted ? "Revoke Server Settings Access" : "Grant Server Settings Access",
-                        _button))
+                    if 
+                    (
+                        _control.CanManage &&
+                        GUI.Button
+                        (
+                            new Rect(0f, y + _row * 2f, _width * 0.6f, _row * 0.85f),
+                            player.Trusted ? "Revoke Server Settings Access" : "Grant Server Settings Access",
+                            _button
+                        )
+                    )
                     {
                         _control.Access.SetTrusted(id, player.Account, !player.Trusted, out var message);
                         _message = message;
@@ -501,16 +563,21 @@ namespace S3_NullServers.UI
 
         private void DrawMutes()
         {
-            GUI.Label(
+            GUI.Label
+            (
                 new Rect(0f, 0f, _width, _row * 2f),
                 _control.Access.Mutes.LoadError ??
                 "Chat mutes use account names and remain until removed. Nickname changes do not remove a mute.",
-                _small);
+                _small
+            );
+
             float y = _row * 2.2f;
+
             foreach (BanEntry entry in _control.Access.MutedAccounts.ToArray())
             {
                 GUI.Label(new Rect(0f, y, _width * 0.72f, _row), entry.Nickname, _label);
                 GUI.Label(new Rect(0f, y + _row, _width * 0.72f, _row), entry.Account, _small);
+
                 if (GUI.Button(new Rect(_width * 0.76f, y, _width * 0.24f, _row), "UNMUTE", _button))
                 {
                     _control.Access.SetMuted(-1, entry.Account, false, out var message);
@@ -523,19 +590,26 @@ namespace S3_NullServers.UI
 
         private void DrawBans()
         {
-            GUI.Label(
+            GUI.Label
+            (
                 new Rect(0f, 0f, _width, _row * 2f),
                 _control.Bans.LoadError ??
                 "Bans use authenticated accounts and survive nickname changes. Guest accounts cannot be banned persistently.",
-                _small);
+                _small
+            );
+
             float y = _row * 2.2f;
+
             foreach (BanEntry entry in _control.Access.Bans.ToArray())
             {
                 GUI.Label(new Rect(0f, y, _width * 0.72f, _row), entry.Account, _label);
-                GUI.Label(
+                GUI.Label
+                (
                     new Rect(0f, y + _row, _width * 0.72f, _row),
                     entry.Nickname + " · " + entry.CreatedAt.ToLocalTime().ToString("g"),
-                    _small);
+                    _small
+                );
+
                 if (GUI.Button(new Rect(_width * 0.76f, y, _width * 0.24f, _row), "UNBAN", _button))
                 {
                     _control.Unban(entry.Account, out var message);
@@ -557,16 +631,20 @@ namespace S3_NullServers.UI
                 wrapMode = TextureWrapMode.Clamp,
                 hideFlags = HideFlags.HideAndDontSave
             };
+
             Color[] pixels = Enumerable.Repeat(border, 9).ToArray();
             pixels[4] = fill;
+
             texture.SetPixels(new Il2CppStructArray<Color>(pixels));
             texture.Apply();
+
             return texture;
         }
 
         private string NumberField(string label, string value, float y)
         {
             GUI.Label(new Rect(0f, y, _width * 0.55f, _row), label, _label);
+
             return GUI.TextField(new Rect(_width * 0.56f, y, _width * 0.44f, _row), value, 3, _input);
         }
 
@@ -574,8 +652,11 @@ namespace S3_NullServers.UI
         {
             Color previous = GUI.contentColor;
             GUI.contentColor = color;
+
             bool clicked = GUI.Button(rect, text, _button);
+
             GUI.contentColor = previous;
+
             return clicked;
         }
     }

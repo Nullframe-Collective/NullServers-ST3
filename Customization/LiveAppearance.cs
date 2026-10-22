@@ -2,10 +2,10 @@ using HarmonyLib;
 using Il2Cpp;
 using Il2CppCodeStage.AntiCheat.Storage;
 using MelonLoader;
-using S3_NullServers.Network;
+using NullServers.Network;
 using UnityEngine;
 
-namespace S3_NullServers.Customization
+namespace NullServers.Customization
 {
     internal sealed class LiveAppearance
     {
@@ -21,24 +21,24 @@ namespace S3_NullServers.Customization
 
         internal IReadOnlyDictionary<int, string> Hats => _hats;
 
-        internal bool Active => _session.IsNullFrame &&
+        internal bool Active => 
+            _session.IsNullFrame &&
             !_session.IsSwitching &&
             _session.Relay &&
             _session.Relay.CurrentRoom != null;
 
-        internal SyncCustomization Local
-        {
-            get; private set;
-        }
+        internal SyncCustomization Local { get; private set; }
 
         internal LiveAppearance(HarmonyLib.Harmony harmony, RelaySession session, MelonLogger.Instance logger)
         {
             _instance = this;
             _session = session;
             _logger = logger;
+
             harmony.Patch(
                 AccessTools.Method(typeof(CharacterCustomization), nameof(CharacterCustomization.Awake)),
                 postfix: new HarmonyMethod(typeof(LiveAppearance), nameof(CaptureHats)));
+
             harmony.Patch(
                 AccessTools.Method(typeof(SyncCustomization), nameof(SyncCustomization.MKFLOHBILFG)),
                 prefix: new HarmonyMethod(typeof(LiveAppearance), nameof(BeforeNativeAppearance)));
@@ -47,17 +47,16 @@ namespace S3_NullServers.Customization
         private static void CaptureHats(CharacterCustomization __instance)
         {
             var hats = _instance._hats;
+
             foreach (var list in new[] { __instance.GKCNMADGAAF, __instance.PFGCEJKOIDO })
             {
-                if (list != null)
+                if (list == null) continue;
+
+                foreach (CharacterCustomization.hat hat in list)
                 {
-                    foreach (CharacterCustomization.hat hat in list)
-                    {
-                        if (hat != null)
-                        {
-                            hats[hat.hatID] = hat.hatName;
-                        }
-                    }
+                    if (hat == null) continue;
+
+                    hats[hat.hatID] = hat.hatName;
                 }
             }
 
@@ -65,15 +64,13 @@ namespace S3_NullServers.Customization
             {
                 foreach (CharacterCustomization.hatList group in __instance.DEGGIDJJNDO)
                 {
-                    if (group?.hat != null)
+                    if (group?.hat == null) continue;
+
+                    foreach (CharacterCustomization.hat hat in group.hat)
                     {
-                        foreach (CharacterCustomization.hat hat in group.hat)
-                        {
-                            if (hat != null)
-                            {
-                                hats[hat.hatID] = hat.hatName;
-                            }
-                        }
+                        if (hat == null) continue;
+
+                        hats[hat.hatID] = hat.hatName;
                     }
                 }
             }
@@ -82,12 +79,10 @@ namespace S3_NullServers.Customization
         private static bool BeforeNativeAppearance(SyncCustomization __instance)
         {
             LiveAppearance instance = _instance;
-            if (!instance.Active)
-            {
-                return true;
-            }
+            if (!instance.Active) return true;
 
             instance.VisualFor(__instance);
+
             return false;
         }
 
@@ -105,18 +100,14 @@ namespace S3_NullServers.Customization
         internal void Update()
         {
             Textures.Update();
-            if (Time.unscaledTime < _nextUpdate)
-            {
-                return;
-            }
+
+            if (Time.unscaledTime < _nextUpdate) return;
 
             _nextUpdate = Time.unscaledTime + 0.2f;
             EnsureRoom();
             Local = null;
-            if (!Active)
-            {
-                return;
-            }
+
+            if (!Active) return;
 
             foreach (IntPtr pointer in _visuals.Where(pair => !pair.Value.Sync).Select(pair => pair.Key).ToArray())
             {
@@ -126,10 +117,7 @@ namespace S3_NullServers.Customization
 
             foreach (SyncCustomization sync in UnityEngine.Object.FindObjectsOfType<SyncCustomization>())
             {
-                if (!sync.IsClientInitialized || sync.CLENBEHPEEL < 0 || sync.IGDAIDNEJBO)
-                {
-                    continue;
-                }
+                if (!sync.IsClientInitialized || sync.CLENBEHPEEL < 0 || sync.IGDAIDNEJBO) continue;
 
                 if (sync.IsOwner)
                 {
@@ -137,6 +125,7 @@ namespace S3_NullServers.Customization
                 }
 
                 Appearance appearance = Read(sync);
+
                 if (sync.CNNHJCHFEBO)
                 {
                     appearance = appearance with
@@ -152,17 +141,16 @@ namespace S3_NullServers.Customization
         private void EnsureRoom()
         {
             string roomId = Active ? _session.Relay.CurrentRoom.Id : null;
-            if (_roomId != roomId)
-            {
-                foreach (var entry in _visuals.Values)
-                {
-                    entry.Visual.Dispose();
-                }
+            if (_roomId == roomId) return;
 
-                _visuals.Clear();
-                Textures.Dispose();
-                _roomId = roomId;
+            foreach (var entry in _visuals.Values)
+            {
+                entry.Visual.Dispose();
             }
+
+            _visuals.Clear();
+            Textures.Dispose();
+            _roomId = roomId;
         }
 
         internal Material[] OriginalMaterials(SyncCustomization sync, Renderer renderer) => VisualFor(sync).OriginalMaterials(renderer);
@@ -173,25 +161,31 @@ namespace S3_NullServers.Customization
             string[] urls = (sync.CLABNNBNKAF ?? "").Split('|');
             string Url(int index) => urls.Length > index ? urls[index] : "";
 
-            return new Appearance(
+            return new Appearance
+            (
                 sync.CLENBEHPEEL,
                 "#" + ColorUtility.ToHtmlStringRGB(new Color(color.x, color.y, color.z)),
                 !string.IsNullOrEmpty(sync.CLABNNBNKAF),
                 Url(0),
                 Url(1),
                 Url(2),
-                Url(3));
+                Url(3)
+            );
         }
 
         internal bool Apply(Appearance appearance, out string error)
         {
             error = "Your character is not available yet.";
+
             SyncCustomization sync = Local;
-            if (!Active ||
+            if 
+            (
+                !Active ||
                 !sync ||
                 !sync.IsOwner ||
                 !sync.IsClientInitialized ||
-                !appearance.Validate(sync.GKCNMADGAAF.Count, out error))
+                !appearance.Validate(sync.GKCNMADGAAF.Count, out error)
+            )
             {
                 return false;
             }
@@ -200,27 +194,33 @@ namespace S3_NullServers.Customization
             ObscuredPrefs.SetInt("HatID", appearance.Hat);
             ObscuredPrefs.SetColor("FurColor", color);
             ObscuredPrefs.SetBool("CustomSkin", appearance.UseSkin);
+
             string[] urls = appearance.Urls;
-            string[] keys = new[]
-            {
+            string[] keys =
+            [
                 "HeadURL",
                 "BodyURL",
                 "ArmsURL",
                 "LegsURL"
-            };
+            ];
+
             for (int index = 0; index < keys.Length; index++)
             {
                 ObscuredPrefs.SetString(keys[index], urls[index]);
             }
 
             ObscuredPrefs.Save();
+
             sync.CLENBEHPEEL = appearance.Hat;
             sync.LJALDBMBHHN = new Vector3(color.r, color.g, color.b);
             sync.CLABNNBNKAF = appearance.SkinData;
             sync.BIHMIMOKJLM(appearance.Hat, sync.LJALDBMBHHN, appearance.SkinData);
             VisualFor(sync).Apply(appearance, Textures);
-            _logger.Msg($"Appearance updated: hat {appearance.Hat}; fur {appearance.FurColor}; skin={appearance.UseSkin}.");
+
+            _logger?.Msg($"Appearance updated: hat {appearance.Hat}; fur {appearance.FurColor}; skin={appearance.UseSkin}.");
+
             error = null;
+
             return true;
         }
     }

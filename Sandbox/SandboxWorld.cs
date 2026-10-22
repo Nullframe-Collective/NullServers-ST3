@@ -3,13 +3,13 @@ using Il2Cpp;
 using Il2CppFishNet.Connection;
 using Il2CppFishNet.Transporting;
 using Il2CppInterop.Runtime;
-using S3_NullServers.Network;
-using S3_NullServers.Players;
-using S3_NullServers.Server;
+using NullServers.Network;
+using NullServers.Players;
+using NullServers.Server;
 using UnityEngine;
 using Object = UnityEngine.Object;
 
-namespace S3_NullServers.Sandbox
+namespace NullServers.Sandbox
 {
     internal sealed class SandboxWorld
     {
@@ -34,47 +34,29 @@ namespace S3_NullServers.Sandbox
         private Vector3 _launch;
 
         internal SandboxAssets Assets { get; } = new();
-        internal SandboxBuilding Building
-        {
-            get;
-        }
-        internal RagdollSync Ragdolls
-        {
-            get;
-        }
-        internal PhysicsReplication Physics
-        {
-            get;
-        }
-        internal PhysGun Gun
-        {
-            get;
-        }
+        internal SandboxBuilding Building { get; }
+        internal RagdollSync Ragdolls { get; }
+        internal PhysicsReplication Physics { get; }
+        internal PhysGun Gun { get; }
 
-        internal bool Active => _session.IsNullFrame &&
+        internal bool Active => 
+            _session.IsNullFrame &&
             !_session.IsSwitching &&
             _control.Room != null &&
             _menu &&
             _menu.CJNLEDLNGID;
 
         internal bool IsHost => _control.CanManage;
-
         internal bool IsAdmin => _control.Access.CanOpen;
-
         internal int LocalId => _session.Relay ? _session.Relay.LocalPlayerId : -1;
 
-        internal string Epoch
-        {
-            get; private set;
-        }
-        internal string Status
-        {
-            get; private set;
-        }
+        internal string Epoch { get; private set; }
+        internal string Status { get; private set; }
 
         internal IReadOnlyList<RoomPlayer> Players => _control.Access.Players;
 
-        internal bool ConsoleEnabled => Active &&
+        internal bool ConsoleEnabled => 
+            Active &&
             Object.FindObjectsOfType<Volume>().Any(volume =>
             volume.IsClientInitialized && volume.APJODFNHLED?.Value == 1);
 
@@ -84,31 +66,32 @@ namespace S3_NullServers.Sandbox
             _control = control;
             _profiles = profiles;
             _session = session;
+
             Building = new SandboxBuilding(this);
             Ragdolls = new RagdollSync(harmony, this);
             Physics = new PhysicsReplication(this);
             Gun = new PhysGun(this);
+
             profiles.SandboxReceived += ReceiveRequest;
             profiles.SandboxReceivedFromHost += Receive;
+
             harmony.Patch(
                 AccessTools.Method(typeof(FPScontroller), nameof(FPScontroller.Update)),
                 prefix: new HarmonyMethod(typeof(SandboxWorld), nameof(BeforeMovement)));
+
             harmony.Patch(
                 AccessTools.Method(typeof(FPScontroller), nameof(FPScontroller.FixedUpdate)),
                 prefix: new HarmonyMethod(typeof(SandboxWorld), nameof(BeforeMovement)));
+
             harmony.Patch(
                 AccessTools.Method(typeof(PlayerDamage), nameof(PlayerDamage.KDDDGBFEFOC)),
                 prefix: new HarmonyMethod(typeof(SandboxWorld), nameof(BeforeDamage)));
         }
 
         internal SandboxMessage Message(SandboxKind kind) => new(1, _room, _menu.NetworkObject.ObjectId, Epoch ?? "", kind);
-
         internal PlayerEffects Effects(int id) => _effects.GetValueOrDefault(id) ?? new PlayerEffects(id);
-
         internal bool Administrator(int id) => _control.Access.IsAdministrator(id);
-
         internal void SetStatus(string value) => Status = value;
-
         internal void Submit(SandboxMessage message)
         {
             if (!Active || Epoch == null)
@@ -137,10 +120,7 @@ namespace S3_NullServers.Sandbox
 
         internal void Send(SandboxMessage message, NetworkConnection target = null, bool unreliable = false)
         {
-            if (!Active || !IsHost)
-            {
-                return;
-            }
+            if (!Active || !IsHost) return;
 
             if (target != null)
             {
@@ -154,9 +134,12 @@ namespace S3_NullServers.Sandbox
 
             foreach (NetworkConnection connection in _control.Connections())
             {
-                if (connection.ClientId != LocalId &&
+                if 
+                (
+                    connection.ClientId != LocalId &&
                     connection.IsAuthenticated &&
-                    _peers.GetValueOrDefault(connection.ClientId) == connection.Pointer)
+                    _peers.GetValueOrDefault(connection.ClientId) == connection.Pointer
+                )
                 {
                     _profiles.SendSandbox(message, connection, channel: unreliable ? Channel.Unreliable : Channel.Reliable);
                 }
@@ -174,10 +157,7 @@ namespace S3_NullServers.Sandbox
 
         internal void SubmitAim(SandboxMessage message)
         {
-            if (!Active || Epoch == null)
-            {
-                return;
-            }
+            if (!Active || Epoch == null) return;
 
             if (IsHost)
             {
@@ -191,12 +171,15 @@ namespace S3_NullServers.Sandbox
 
         private void ReceiveRequest(NetworkConnection connection, SandboxMessage message)
         {
-            if (!Active ||
+            if 
+            (
+                !Active ||
                 !IsHost ||
                 !connection.IsValid ||
                 !connection.IsAuthenticated ||
                 message.Room != _room ||
-                message.RoomObject != _menu.NetworkObject.ObjectId)
+                message.RoomObject != _menu.NetworkObject.ObjectId
+            )
             {
                 return;
             }
@@ -218,10 +201,7 @@ namespace S3_NullServers.Sandbox
                 budget = (now, 0);
             }
 
-            if (budget.Count >= 8)
-            {
-                return;
-            }
+            if (budget.Count >= 8) return;
 
             _requests[connection.ClientId] = (budget.Time, budget.Count + 1);
             if (message.Kind == SandboxKind.Hello)
@@ -233,9 +213,12 @@ namespace S3_NullServers.Sandbox
 
                 Gun.Disconnect(connection.ClientId);
                 Physics.Disconnect(connection.ClientId);
+
                 _snapshotBudgets.Remove(connection.ClientId);
                 _peers[connection.ClientId] = connection.Pointer;
+
                 Send(Message(SandboxKind.Ready), connection);
+
                 foreach (BuildingObject state in Building.States)
                 {
                     Queue(Message(SandboxKind.Object) with
@@ -254,6 +237,7 @@ namespace S3_NullServers.Sandbox
 
                 Ragdolls.Snapshot(connection);
                 Gun.Snapshot(connection);
+
                 return;
             }
 
@@ -268,6 +252,7 @@ namespace S3_NullServers.Sandbox
         private void Process(int sender, SandboxMessage message)
         {
             string error;
+
             if (message.Kind == SandboxKind.Admin)
             {
                 error = Administrator(sender) ? Execute(sender, message.Command) : "Only the host and trusted administrators can use Advanced.";
@@ -318,13 +303,11 @@ namespace S3_NullServers.Sandbox
 
                 Epoch = message.Epoch;
                 Status = "NullFrame sandbox connected.";
+
                 return;
             }
 
-            if (Epoch == null || message.Epoch != Epoch)
-            {
-                return;
-            }
+            if (Epoch == null || message.Epoch != Epoch) return;
 
             switch (message.Kind)
             {
@@ -375,9 +358,12 @@ namespace S3_NullServers.Sandbox
 
         private string Execute(int sender, SandboxCommand command)
         {
-            if (command == null ||
+            if 
+            (
+                command == null ||
                 !_control.Manager.ServerManager.Clients.TryGetValue(command.Target, out var target) ||
-                !target.IsAuthenticated)
+                !target.IsAuthenticated
+            )
             {
                 return "This player has left the room.";
             }
@@ -394,6 +380,7 @@ namespace S3_NullServers.Sandbox
 
             PlayerEffects current = Effects(command.Target);
             PlayerNetworkController avatar = Avatar(command.Target);
+
             switch (command.Action)
             {
                 case PlayerCommand.Scale:
@@ -452,10 +439,12 @@ namespace S3_NullServers.Sandbox
                         {
                             Invincible = false
                         };
+
                         Send(Message(SandboxKind.Effects) with
                         {
                             Effects = _effects[command.Target]
                         });
+
                         damage.LAKFCNKPBPM(100000f, null);
                     }
                     else
@@ -492,12 +481,16 @@ namespace S3_NullServers.Sandbox
 
                     Transform destination = command.Action == PlayerCommand.Bring ? source.transform : avatar.transform;
                     NetworkConnection receiver = command.Action == PlayerCommand.Bring ? target : _control.Manager.ServerManager.Clients[sender];
-                    CommandTo(
+                    CommandTo
+                    (
                         receiver,
-                        new SandboxCommand(
+                        new SandboxCommand
+                        (
                             PlayerCommand.Bring,
                             receiver.ClientId,
-                            Position: Point(destination.position + destination.forward * 2f + Vector3.up)));
+                            Position: Point(destination.position + destination.forward * 2f + Vector3.up)
+                        )
+                    );
                     return null;
                 case PlayerCommand.Launch:
                     CommandTo(target, command);
@@ -511,6 +504,7 @@ namespace S3_NullServers.Sandbox
             {
                 Effects = current
             });
+
             return null;
         }
 
@@ -583,11 +577,8 @@ namespace S3_NullServers.Sandbox
         }
 
         internal static Point3 Point(Vector3 value) => new(value.x, value.y, value.z);
-
         internal static Vector3 Vector(Point3 value) => new(value.X, value.Y, value.Z);
-
         internal static Rotation4 Rotation(Quaternion value) => new(value.x, value.y, value.z, value.w);
-
         internal static Quaternion Quaternion(Rotation4 value) => new(value.X, value.Y, value.Z, value.W);
 
         internal void Update()
@@ -615,17 +606,17 @@ namespace S3_NullServers.Sandbox
                 Building.Clear();
                 Ragdolls.Clear();
                 Physics.Clear();
+
                 _menu = menu;
                 _room = room;
+
                 Epoch = IsHost && room != null ? Guid.NewGuid().ToString("N") : null;
                 _helloAt = _scanAt = 0f;
+
                 Status = null;
             }
 
-            if (!Active)
-            {
-                return;
-            }
+            if (!Active) return;
 
             if (IsHost && Epoch == null)
             {
@@ -642,10 +633,14 @@ namespace S3_NullServers.Sandbox
             {
                 for (int index = 0; index < 4 && _outgoing.TryPeek(out var item); index++)
                 {
-                    if (!item.Connection.IsValid ||
-                        _peers.GetValueOrDefault(item.Connection.ClientId) != item.Connection.Pointer)
+                    if 
+                    (
+                        !item.Connection.IsValid ||
+                        _peers.GetValueOrDefault(item.Connection.ClientId) != item.Connection.Pointer
+                    )
                     {
                         _outgoing.Dequeue();
+
                         continue;
                     }
 
@@ -656,6 +651,7 @@ namespace S3_NullServers.Sandbox
                         if (current == null)
                         {
                             _outgoing.Dequeue();
+
                             continue;
                         }
 
@@ -668,6 +664,7 @@ namespace S3_NullServers.Sandbox
                     if (snapshot.Kind == SandboxKind.Ragdoll && !Ragdolls.Contains(snapshot.Ragdoll.Id))
                     {
                         _outgoing.Dequeue();
+
                         continue;
                     }
 
@@ -688,13 +685,17 @@ namespace S3_NullServers.Sandbox
 
                 foreach (int id in _peers.Keys.ToArray())
                 {
-                    if (!_control.Manager.ServerManager.Clients.TryGetValue(id, out var peer) ||
-                        peer.Pointer != _peers[id])
+                    if 
+                    (
+                        !_control.Manager.ServerManager.Clients.TryGetValue(id, out var peer) ||
+                        peer.Pointer != _peers[id]
+                    )
                     {
                         _peers.Remove(id);
                         _requests.Remove(id);
                         _snapshotBudgets.Remove(id);
                         Gun.Disconnect(id);
+
                         if (_effects.Remove(id))
                         {
                             Send(Message(SandboxKind.Effects) with
@@ -709,12 +710,10 @@ namespace S3_NullServers.Sandbox
             if (Time.unscaledTime >= _scanAt)
             {
                 _scanAt = Time.unscaledTime + 0.25f;
+
                 foreach (PlayerNetworkController avatar in Object.FindObjectsOfType<PlayerNetworkController>())
                 {
-                    if (!avatar.IsClientInitialized)
-                    {
-                        continue;
-                    }
+                    if (!avatar.IsClientInitialized) continue;
 
                     if (!_scaled.TryGetValue(avatar.Pointer, out var item))
                     {
@@ -734,6 +733,7 @@ namespace S3_NullServers.Sandbox
                 {
                     RestoreMovement();
                     _movement = movement;
+
                     if (movement)
                     {
                         _movementScale = movement.transform.localScale;
@@ -754,10 +754,7 @@ namespace S3_NullServers.Sandbox
 
         private void MoveLocal()
         {
-            if (!_movement)
-            {
-                return;
-            }
+            if (!_movement) return;
 
             PlayerEffects effects = Effects(LocalId);
             _movement.transform.localScale = _movementScale * effects.Scale;
@@ -776,14 +773,13 @@ namespace S3_NullServers.Sandbox
             if (effects.Fly)
             {
                 Camera camera = Camera.main;
-                if (!camera)
-                {
-                    return;
-                }
+                if (!camera) return;
 
-                Vector3 direction = camera.transform.forward * ((Input.GetKey(KeyCode.W) ? 1 : 0) - (Input.GetKey(KeyCode.S) ? 1 : 0)) +
+                Vector3 direction = 
+                    camera.transform.forward * ((Input.GetKey(KeyCode.W) ? 1 : 0) - (Input.GetKey(KeyCode.S) ? 1 : 0)) +
                     camera.transform.right * ((Input.GetKey(KeyCode.D) ? 1 : 0) - (Input.GetKey(KeyCode.A) ? 1 : 0)) +
                     Vector3.up * ((Input.GetKey(KeyCode.Space) ? 1 : 0) - (Input.GetKey(KeyCode.LeftControl) ? 1 : 0));
+
                 _movement.transform.position += direction.normalized * (Input.GetKey(KeyCode.LeftShift) ? 18 : 7) * Mathf.Min(Time.unscaledDeltaTime, 0.05f);
             }
             else if (_launch.sqrMagnitude > 0.01f && controller && controller.enabled)
@@ -812,7 +808,8 @@ namespace S3_NullServers.Sandbox
         private static bool BeforeMovement(FPScontroller __instance)
         {
             SandboxWorld world = _instance;
-            return !world.Active ||
+            return 
+                !world.Active ||
                 __instance != world._movement ||
                 !(world.Effects(world.LocalId).Fly ||
                 world.Effects(world.LocalId).Frozen ||
@@ -831,7 +828,8 @@ namespace S3_NullServers.Sandbox
 
         private static bool BeforeDamage(PlayerDamage __instance, float __0)
         {
-            return __0 <= 0f || !_instance.Active ||
+            return 
+                __0 <= 0f || !_instance.Active ||
                 !_instance.Effects(DamageOwner(__instance)).Invincible;
         }
     }

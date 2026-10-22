@@ -1,21 +1,12 @@
 using System.Text.Json;
 
-namespace S3_NullServers.Server
+namespace NullServers.Server
 {
     internal sealed class BanEntry
     {
-        public string Account
-        {
-            get; set;
-        }
-        public string Nickname
-        {
-            get; set;
-        }
-        public DateTimeOffset CreatedAt
-        {
-            get; set;
-        }
+        public string Account { get; set; }
+        public string Nickname { get; set; }
+        public DateTimeOffset CreatedAt { get; set; }
     }
 
     internal sealed class BanList
@@ -26,21 +17,16 @@ namespace S3_NullServers.Server
 
         internal IReadOnlyList<BanEntry> Entries => _entries;
 
-        internal string LoadError
-        {
-            get; private set;
-        }
+        internal string LoadError { get; private set; }
 
         internal BanList(string path, string label = "ban list")
         {
             _path = path;
             _label = label;
+
             try
             {
-                if (!File.Exists(path))
-                {
-                    return;
-                }
+                if (!File.Exists(path)) return;
 
                 var entries = JsonSerializer.Deserialize<List<BanEntry>>(File.ReadAllText(path));
                 if (entries == null || entries.Any(entry => entry == null || string.IsNullOrWhiteSpace(entry.Account)))
@@ -67,12 +53,14 @@ namespace S3_NullServers.Server
             if (string.IsNullOrWhiteSpace(account))
             {
                 error = "The authenticated account is unavailable.";
+
                 return false;
             }
 
             if (Contains(account))
             {
                 error = null;
+
                 return true;
             }
 
@@ -84,37 +72,40 @@ namespace S3_NullServers.Server
                 CreatedAt = DateTimeOffset.UtcNow
             };
             var next = _entries.Append(entry).ToList();
+
             return Save(next, out error);
         }
 
         internal bool Remove(string account, out string error)
         {
-            return Save(
+            return Save
+            (
                 _entries.Where(entry =>
-            !string.Equals(entry.Account, account, StringComparison.OrdinalIgnoreCase)).ToList(),
-                out error);
+                !string.Equals(entry.Account, account, StringComparison.OrdinalIgnoreCase)).ToList(),
+                out error
+            );
         }
 
         private bool Save(List<BanEntry> entries, out string error)
         {
             error = LoadError;
-            if (error != null)
-            {
-                return false;
-            }
+            if (error != null) return false;
 
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(_path));
                 File.WriteAllText(_path + ".tmp", JsonSerializer.Serialize(entries));
                 File.Move(_path + ".tmp", _path, overwrite: true);
+
                 _entries.Clear();
                 _entries.AddRange(entries);
+
                 return true;
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
                 error = $"Cannot save the {_label}: " + exception.Message;
+
                 return false;
             }
         }
