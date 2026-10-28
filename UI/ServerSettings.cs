@@ -1,84 +1,91 @@
-using Il2Cpp;
-using Il2CppInterop.Runtime.InteropTypes.Arrays;
+﻿using Il2Cpp;
+using Il2CppInterop.Runtime;
 using NullServers.Network;
 using NullServers.Room;
 using NullServers.Server;
 using UnityEngine;
+using UnityEngine.UI;
+using UnityEngine.Events;
+using System.Globalization;
+using Object = UnityEngine.Object;
 
 namespace NullServers.UI
 {
     internal sealed class ServerSettings
     {
         private readonly ServerControl _control;
-        private readonly ColorPicker _picker;
-        private RoomMultiplayerMenu _menu;
         private readonly PauseMenu _pause;
-        private bool _open;
-        private string _roomId;
-        private string _name;
-        private string _capacity;
-        private string _color;
-        private string _scene;
-        private string _mode;
-        private string _minutes;
-        private string _custards;
-        private int _difficulty;
+        private RoomMultiplayerMenu _menu;
+        private GameUi _ui;
+        private GameColorPicker _picker;
+        private GameChoices _choices;
+        private RectTransform _root, _content;
+        private ScrollRect _scroll;
+        private CanvasGroup _controls;
+        private Text _status, _preview, _protection;
+        private Slider _fogEnd;
+        private string _roomId, _name, _capacity, _color, _scene, _mode, _minutes, _custards, _message, _state;
+        private RenderOptions _render;
+        private int _tab, _difficulty;
         private bool _muteGuests;
-        private bool _mapExpanded;
-        private bool _modeExpanded;
-        private int _tab;
-        private Vector2 _scroll;
-        private string _message;
-        private GUIStyle _label;
-        private GUIStyle _rich;
-        private GUIStyle _input;
-        private GUIStyle _button;
-        private GUIStyle _small;
-        private GUIStyle _title;
-        private Rect _window;
-        private Rect _viewport;
-        private float _row;
-        private float _width;
+        private string[] _worldScale, _worldRotation, _worldGravity, _partPosition, _partScale, _partRotation;
+        private MapPart _part;
+        private float _row, _refreshAt;
+        private readonly List<Button> _tabs = new();
 
-        internal ServerSettings(ServerControl control, ColorPicker picker, PauseMenu pause)
+        internal ServerSettings(ServerControl control, PauseMenu pause)
         {
             _control = control;
-            _picker = picker;
             _pause = pause;
-
             pause.Add("Server Settings", Open, () => _control.Access.CanOpen);
         }
 
         internal void Update()
         {
-            RoomMultiplayerMenu menu = RoomMultiplayerMenu.GJDGDIGECJN;
-            if 
-            (
-                _open &&
-                (!_control.Access.CanOpen ||
-                !menu ||
-                menu != _menu ||
-                !menu.IOMIAHNBDOG ||
-                _control.Room.Id != _roomId)
-            )
+            if (!_root) return;
+
+            RoomMultiplayerMenu menu = RoomMultiplayerMenu.Current;
+            if (!_control.Access.CanOpen || !menu || menu != _menu || !menu.IsPaused || _control.Room.Id != _roomId)
             {
                 Close();
+                return;
+            }
+
+            _controls.interactable = !_control.Busy;
+            _status.text = _message ?? _control.Access.Status ?? _control.Status ?? "Room management";
+            _picker.Update();
+
+            if (_preview)
+            {
+                bool valid = RoomName.TryParse(_name, out _, out var display, out var error);
+                string color = RoomOptions.IsValidColor(_color) ? _color : "#FFFFFF";
+                _preview.text = valid ? $"<color={color}>{display}</color>" : error;
+            }
+
+            if (_protection)
+            {
+                _protection.text = $"Anti-Crash: ACTIVE · Blocked: {_control.Protection.Blocked} · Removed: {_control.Protection.Removed}";
+            }
+
+            if (Time.unscaledTime >= _refreshAt)
+            {
+                _refreshAt = Time.unscaledTime + 0.25f;
+                if (State() != _state)
+                {
+                    Page(false);
+                }
             }
         }
 
-        private void Open()
+        private void ReadRoomState()
         {
-            if (!_control.Access.CanOpen || !_pause.Hide(this)) return;
-
-            _menu = _pause.Menu;
-
             Il2CppFishNet.Transporting.Relay.RelayRoomInfo room = _control.Room;
             _roomId = room.Id;
             _name = RoomName.ReadDisplay(room.RoomData, room.Name);
             _capacity = room.MaxPlayers.ToString();
             _color = RoomOptions.ReadNameColor(room.RoomData) ?? "#FFFFFF";
 
-            RoomProperties properties = RoomProperties.HFBENCJFGPO(room.RoomData);
+            RoomProperties properties = RoomProperties.Parse(room.RoomData);
             _scene = properties.MapName;
             _mode = properties.GameMode;
             _minutes = Math.Max(1, properties.RoundDuration / 60).ToString();
@@ -86,264 +93,188 @@ namespace NullServers.UI
             _difficulty = properties.Difficulty;
             _muteGuests = properties.MuteGuests;
 
+            WorldSettings world = _control.Access.Environment.World ?? WorldSettings.Default;
+            _render = _control.Rendering.Current;
+            _worldScale = VectorText(world.Scale);
+            _worldRotation = VectorText(world.Rotation);
+            _worldGravity = VectorText(world.Gravity);
+
+            _part = _control.Rendering.Geometry.Aimed(Camera.main);
+            _partPosition = _partScale = _partRotation = null;
+        }
+
+        private void Open()
+        {
+            if (!_control.Access.CanOpen || !_pause.Hide(this)) return;
+
+            _menu = _pause.Menu;
             _message = null;
-            _mapExpanded = _modeExpanded = false;
-            _scroll = default;
-            _open = true;
+            ReadRoomState();
+
+            try
+            {
+                _ui = new GameUi(_pause.Settings);
+                _root = GameUi.Rect("ServerSettings", _pause.Root);
+
+                Text title = _ui.Label(_root, "Server Settings", 42);
+                GameUi.Area(title.rectTransform, 0.32f, 0.82f, 0.92f, 0.91f);
+
+                RectTransform navigation = GameUi.Rect("Sections", _root);
+                GameUi.Area(navigation, 0.08f, 0.18f, 0.26f, 0.76f);
+
+                _tabs.Clear();
+                string[] tabs = ["Room", "Round", "Players", "Bans", "Chat", "Rendering", "World"];
+
+                for (int index = 0; index < tabs.Length; index++)
+                {
+                    int tab = index;
+                    Button button = _ui.RowButton(_ui.Row(navigation, index * 64f, 54f), tabs[index], () =>
+                    {
+                        _tab = tab;
+                        _message = null;
+                        Page();
+                    });
+                    Text label = button.GetComponentInChildren(Il2CppType.Of<Text>(), true).Cast<Text>();
+                    GameUi.Fit(label, Mathf.RoundToInt(18f * _ui.Unit), Mathf.RoundToInt(42f * _ui.Unit));
+                    _tabs.Add(button);
+                }
+
+                Button back = _ui.Button(_root, "BACK", Close);
+                GameUi.Area(back.GetComponent<RectTransform>(), 0.08f, 0.07f, 0.26f, 0.14f);
+                _scroll = _ui.Scroll(_root, "ServerPages");
+                GameUi.Area(_scroll.GetComponent<RectTransform>(), 0.32f, 0.17f, 0.92f, 0.79f);
+                _content = _scroll.content;
+                _controls = GameUi.Add<CanvasGroup>(_content.gameObject);
+                _status = _ui.Label(_root, "", 23);
+                _status.color = new Color(1f, 1f, 1f, 0.65f);
+                GameUi.Area(_status.rectTransform, 0.32f, 0.055f, 0.92f, 0.14f);
+                _picker = new GameColorPicker(_ui, _root);
+                _choices = new GameChoices(_ui, _root);
+                Page();
+                _root.SetAsLastSibling();
+            }
+            catch
+            {
+                Close();
+                throw;
+            }
         }
 
         private void Close()
         {
-            _open = false;
-            _picker.Close();
+            if (_root)
+            {
+                _root.gameObject.SetActive(false);
+                Object.Destroy(_root.gameObject);
+            }
+
+            _root = null;
+            _picker = null;
+            _choices = null;
             _pause.Restore(this);
         }
 
-        internal void Draw()
+        private string State()
         {
-            if (!_open || !_menu || !_control.Access.CanOpen) return;
-
-            GUISkin oldSkin = GUI.skin;
-            Color oldColor = GUI.color;
-            Color oldContentColor = GUI.contentColor;
-            Color oldBackgroundColor = GUI.backgroundColor;
-            bool oldEnabled = GUI.enabled;
-            int oldDepth = GUI.depth;
-
-            GUI.depth = -100;
-            GUI.skin = _menu.BIPMFIBNFBC;
-            GUI.color = Color.white;
-            GUI.contentColor = GUI.backgroundColor = Color.white;
-
-            if (_label == null)
+            return _tab switch
             {
-                _label = new GUIStyle(GUI.skin.label)
-                {
-                    font = GUI.skin.font,
-                    richText = false,
-                    wordWrap = true,
-                    alignment = TextAnchor.MiddleLeft
-                };
-
-                _rich = new GUIStyle(_label)
-                {
-                    richText = true
-                };
-
-                _small = new GUIStyle(_label);
-                _title = new GUIStyle(_label);
-
-                _input = new GUIStyle(GUI.skin.textField)
-                {
-                    font = GUI.skin.font,
-                    richText = false
-                };
-
-                _button = new GUIStyle(GUI.skin.button)
-                {
-                    font = GUI.skin.font,
-                    richText = false,
-                    alignment = TextAnchor.MiddleCenter,
-                    border = new RectOffset(1, 1, 1, 1),
-                    padding = new RectOffset(12, 12, 4, 4)
-                };
-                _button.normal.background = ButtonBackground(new Color(0.09f, 0.1f, 0.12f), new Color(0.27f, 0.29f, 0.33f));
-                _button.hover.background = ButtonBackground(new Color(0.24f, 0.1f, 0.11f), new Color(0.75f, 0.25f, 0.28f));
-                _button.active.background = ButtonBackground(new Color(0.4f, 0.09f, 0.11f), new Color(0.9f, 0.3f, 0.33f));
-                _button.onNormal.background = _button.hover.background;
-                _button.onHover.background = _button.active.background;
-                _button.onActive.background = _button.active.background;
-                _button.focused.background = _button.hover.background;
-                _button.onFocused.background = _button.active.background;
-
-                foreach (GUIStyleState state in new[]
-                {
-                    _button.normal,
-                    _button.hover,
-                    _button.active,
-                    _button.focused,
-                    _button.onNormal,
-                    _button.onHover,
-                    _button.onActive,
-                    _button.onFocused
-                })
-                {
-                    state.textColor = Color.white;
-                }
-
-                _label.normal.textColor = new Color(0.8f, 0.81f, 0.84f);
-                _small.normal.textColor = new Color(0.62f, 0.65f, 0.7f);
-                _title.normal.textColor = Color.white;
-            }
-
-            int fontSize = Mathf.Clamp(Screen.height / 38, 16, 30);
-            _label.fontSize = _rich.fontSize = _input.fontSize = _button.fontSize = fontSize;
-            _small.fontSize = Mathf.Max(13, fontSize - 3);
-            _title.fontSize = fontSize + 5;
-            _row = fontSize * 1.65f;
-
-            float width = Mathf.Min(Screen.width * 0.78f, 1200f);
-            _window = new Rect((Screen.width - width) / 2f, Screen.height * 0.09f, width, Screen.height * 0.82f);
-            _picker.HandleInput();
-
-            if (_picker.IsOpen && 
-                Event.current.type != EventType.Repaint && 
-                Event.current.type != EventType.Layout)
-            {
-                GUI.enabled = false;
-            }
-
-            GUI.color = new Color(0f, 0f, 0f, 0.97f);
-            GUI.DrawTexture(_window, Texture2D.whiteTexture);
-            GUI.color = Color.white;
-            GUI.BeginGroup(_window);
-
-            try
-            {
-                GUI.Label(new Rect(20f, 10f, width - 140f, _row), "Server Settings", _title);
-                if (GUI.Button(new Rect(width - 110f, 10f, 90f, _row), "Close", _button))
-                {
-                    Close();
-                }
-
-                string[] tabs =
-                [
-                    "Room",
-                    "Round",
-                    "Players",
-                    "Bans",
-                    "Chat"
-                ];
-                float tabWidth = (width - 40f) / tabs.Length;
-
-                for (int index = 0; index < tabs.Length; index++)
-                {
-                    if (GUI.Toggle
-                    (
-                        new Rect(20f + index * tabWidth, _row + 18f, tabWidth - 5f, _row),
-                        _tab == index,
-                        tabs[index],
-                        _button
-                    ) && _tab != index)
-                    {
-                        _tab = index;
-                        _scroll = default;
-                        _message = null;
-                    }
-                }
-
-                _viewport = new Rect(20f, _row * 2f + 30f, width - 40f, _window.height - _row * 4f - 50f);
-                _width = _viewport.width - 24f;
-
-                float contentRows = _tab switch
-                {
-                    0 => 14f,
-                    1 => 13 + (_mapExpanded ? _control.Maps.Count : 0) + (_modeExpanded ? _control.Modes.Count : 0),
-                    2 => 2f + _control.Access.Players.Count * 3.1f,
-                    3 => 3 + _control.Access.Bans.Count * 2,
-                    _ => 3 + _control.Access.MutedAccounts.Count * 2
-                };
-
-                _scroll = GUI.BeginScrollView(_viewport, _scroll, new Rect(0f, 0f, _width, contentRows * _row));
-
-                try
-                {
-                    GUI.enabled = GUI.enabled && !_control.Busy;
-
-                    switch (_tab)
-                    {
-                        case 0:
-                            DrawRoom();
-                            break;
-                        case 1:
-                            DrawRound();
-                            break;
-                        case 2:
-                            DrawPlayers();
-                            break;
-                        case 3:
-                            DrawBans();
-                            break;
-                        case 4:
-                            DrawMutes();
-                            break;
-                    }
-                }
-                finally
-                {
-                    GUI.EndScrollView();
-                }
-
-                GUI.enabled = oldEnabled;
-                GUI.Label
-                (
-                    new Rect(20f, _window.height - _row * 1.8f, width - 40f, _row * 1.6f),
-                    _message ?? _control.Access.Status ?? _control.Status ?? "Room management",
-                    _small
-                );
-            }
-            finally
-            {
-                GUI.EndGroup();
-                GUI.enabled = oldEnabled;
-
-                if (_open)
-                {
-                    _picker.Draw(_menu.BIPMFIBNFBC);
-                }
-
-                GUI.skin = oldSkin;
-                GUI.color = oldColor;
-                GUI.contentColor = oldContentColor;
-                GUI.backgroundColor = oldBackgroundColor;
-                GUI.depth = oldDepth;
-            }
+                0 => _control.CanManage + ":" + RoomProperties.Parse(_control.Room.RoomData).IsOpen,
+                2 => _control.CanManage + ":" + string.Join("|", _control.Access.Players.Select(player =>
+                    $"{player.Id}:{player.Account}:{player.Nickname}:{player.Guest}:{player.Trusted}:{player.Muted}")),
+                3 or 4 => string.Join("|", (_tab == 4 ? _control.Access.MutedAccounts : _control.Access.Bans)
+                    .Select(entry => $"{entry.Account}:{entry.Nickname}:{entry.CreatedAt}")),
+                5 => _render == null && _control.Rendering.Current != null ? "ready" : "",
+                _ => ""
+            };
         }
 
-        private void DrawRoom()
+        private void Page(bool reset = true)
         {
-            GUI.Label(Line(0f), "Room Name", _label);
+            _choices.Close();
+            _picker.Close();
+            float position = reset ? 1f : _scroll.verticalNormalizedPosition;
+            _scroll.StopMovement();
+            GameUi.Clear(_content);
+            _preview = _protection = null;
+            _fogEnd = null;
+            _row = 0f;
+            _render ??= _control.Rendering.Current;
 
-            _name = GUI.TextField(Line(1f), _name, RoomName.MaxDisplayBytes, _input);
-
-            bool valid = RoomName.TryParse(_name, out _, out var display, out var error);
-            string previewColor = RoomOptions.IsValidColor(_color) ? _color : "#FFFFFF";
-            GUI.Label
-            (
-                new Rect(0f, _row * 2.2f, _width, _row * 1.5f),
-                valid ? $"<color={previewColor}>{display}</color>" : error,
-                valid ? _rich : _small
-            );
-
-            GUI.Label(new Rect(0f, _row * 3.6f, _width, _row), "Partial color: <color=#FF5555>Red</color> White", _small);
-
-            GUI.Label(new Rect(0f, _row * 4.8f, _width * 0.6f, _row), "Max Players (up to 50)", _label);
-            _capacity = GUI.TextField(new Rect(_width * 0.7f, _row * 4.8f, _width * 0.3f, _row), _capacity, 2, _input);
-
-            GUI.Label(new Rect(0f, _row * 6f, _width * 0.5f, _row), "Default Name Color", _label);
-            _color = GUI.TextField(new Rect(_width * 0.52f, _row * 6f, _width * 0.48f - _row - 8f, _row), _color, 7, _input);
-
-            Rect swatch = new(_width - _row, _row * 6f, _row, _row);
-            if (ColorPicker.Swatch(swatch, previewColor))
+            switch (_tab)
             {
-                Action<string> updateColor = color => _color = color;
-                _picker.Open
-                (
-                    new Rect
-                    (
-                        _window.x + _viewport.x + swatch.x,
-                        _window.y + _viewport.y + swatch.y - _scroll.y,
-                        _row,
-                        _row
-                    ),
-                    previewColor,
-                    updateColor,
-                    updateColor,
-                    valid ? display : "Room Name"
-                );
+                case 0: Room(); break;
+                case 1: Round(); break;
+                case 2: Players(); break;
+                case 3: Accounts(false); break;
+                case 4: Accounts(true); break;
+                case 5: Rendering(); break;
+                case 6: World(); break;
             }
 
-            if (GUI.Button(new Rect(0f, _row * 7.5f, _width, _row * 1.2f), "Apply Room Settings", _button))
+            _ui.Height(_content, Mathf.Max(0f, _row - 16f));
+            Canvas.ForceUpdateCanvases();
+            _scroll.verticalNormalizedPosition = position;
+
+            for (int index = 0; index < _tabs.Count; index++)
+            {
+                GameUi.Select(_tabs[index], index == _tab);
+            }
+
+            _state = State();
+        }
+
+        private RectTransform Line(float height = 52f)
+        {
+            RectTransform row = _ui.Row(_content, _row, height);
+            _row += height + 16f;
+            return row;
+        }
+
+        private Text Label(string text, int size = 26, float height = 52f) => _ui.Label(Line(height), text, size);
+
+        private void Field(string title, string value, int limit, Action<string> changed)
+        {
+            RectTransform row = Line();
+            _ui.Caption(row, title);
+            _ui.Field(row, 0.46f, 1f, value, "", changed, limit);
+        }
+
+        private Button Action(string title, Action clicked, bool enabled = true, Color? color = null)
+        {
+            Button button = _ui.RowButton(Line(), title, clicked, color: color);
+            button.interactable = enabled;
+            return button;
+        }
+
+        private void ColorField(string title, string value, Action<string> changed)
+        {
+            RectTransform row = Line();
+            _ui.Caption(row, title);
+            _ui.ColorField(row, value, _picker, changed);
+        }
+
+        private void Choice(string title, string value, IEnumerable<(string Key, string Title)> choices, Action<string> selected)
+        {
+            RectTransform row = Line();
+            _ui.Caption(row, title);
+            _ui.RowButton(row, value + "  [v]", () => _choices.Open(title, choices, key =>
+            {
+                selected(key);
+                Page(false);
+            }), 0.46f);
+        }
+
+        private void Room()
+        {
+            Label("Room Name", 28, 40f);
+            _ui.Input(Line(), _name, "Room name", value => _name = value, RoomName.MaxDisplayBytes);
+            _preview = Label("", 30, 60f);
+            _preview.supportRichText = true;
+            Text hint = Label("Partial color: <color=#FF5555>Red</color> White", 22, 36f);
+            hint.supportRichText = true;
+            Field("Max Players (up to 50)", _capacity, 2, value => _capacity = value);
+            ColorField("Default Name Color", _color, value => _color = value);
+            Action("Apply Room Settings", () =>
             {
                 if (!int.TryParse(_capacity, out var capacity))
                 {
@@ -351,313 +282,294 @@ namespace NullServers.UI
                 }
                 else
                 {
-                    _control.ApplyRoom(_name, capacity, _color, out var message);
-                    _message = message;
+                    _control.ApplyRoom(_name, capacity, _color, out _message);
                 }
-            }
-
-            if (!RoomProperties.HFBENCJFGPO(_control.Room.RoomData).IsOpen &&
-                GUI.Button(new Rect(0f, _row * 9f, _width, _row), "Reopen Room", _button))
+            });
+            if (!RoomProperties.Parse(_control.Room.RoomData).IsOpen)
             {
-                _control.Reopen(out var message);
-                _message = message;
-            }
-
-            if (_control.CanManage && GUI.Button(new Rect(0f, _row * 10.5f, _width, _row), "Spawn Sandbox Console", _button))
-            {
-                _message = _control.Tools.SpawnConsole(out var message) ? "Sandbox console enabled. Use the game's console key to open it." : message;
+                Action("Reopen Room", () => _control.Reopen(out _message));
             }
 
             if (_control.CanManage)
             {
-                GUI.Label
-                (
-                    new Rect(0f, _row * 12f, _width, _row * 1.5f),
-                    $"Anti-Crash: ACTIVE · Blocked: {_control.Protection.Blocked} · Removed: {_control.Protection.Removed}",
-                    _small
-                );
+                Action("Spawn Sandbox Console", () =>
+                    _message = _control.Tools.SpawnConsole(out var error) ? "Sandbox console enabled. Use the game's console key to open it." : error);
             }
+
+            if (_control.CanManage)
+            {
+                _protection = Label("", 22, 64f);
+            }
+
+            Check("Keep ragdolls (up to 512)", _control.Access.Environment.KeepRagdolls, value =>
+                _control.Access.SetEnvironment(_control.Access.Environment with { KeepRagdolls = value }, out _message));
+            Check("Throw Any One", _control.Access.Environment.ThrowAnyone, value =>
+                _control.Access.SetEnvironment(_control.Access.Environment with { ThrowAnyone = value }, out _message));
         }
 
-        private void DrawRound()
+        private void Round()
         {
-            float y = 0f;
-            GUI.Label(new Rect(0f, y, _width * 0.28f, _row), "Map", _label);
-
-            if (GUI.Button(new Rect(_width * 0.3f, y, _width * 0.7f, _row), (_scene ?? "Choose map") + "  [v]", _button))
-            {
-                _mapExpanded = !_mapExpanded;
-            }
-
-            y += _row * 1.2f;
-            if (_mapExpanded)
-            {
-                foreach (string scene in _control.Maps)
-                {
-                    if (GUI.Button(new Rect(_width * 0.3f, y, _width * 0.7f, _row), scene, _button))
-                    {
-                        _scene = scene;
-                        _mapExpanded = false;
-                    }
-
-                    y += _row;
-                }
-            }
-
-            GUI.Label(new Rect(0f, y, _width * 0.28f, _row), "Game Mode", _label);
-            if
-            (
-                GUI.Button
-                (
-                    new Rect(_width * 0.3f, y, _width * 0.7f, _row),
-                    (_control.Modes.GetValueOrDefault(_mode ?? "") ?? _mode ?? "Choose mode") + "  [v]",
-                    _button
-                )
-            )
-            {
-                _modeExpanded = !_modeExpanded;
-            }
-
-            y += _row * 1.2f;
-            if (_modeExpanded)
-            {
-                foreach (var mode in _control.Modes)
-                {
-                    if (GUI.Button(new Rect(_width * 0.3f, y, _width * 0.7f, _row), mode.Value, _button))
-                    {
-                        _mode = mode.Key;
-                        _modeExpanded = false;
-                    }
-
-                    y += _row;
-                }
-            }
-
-            _minutes = NumberField("Timer (minutes, 1–60)", _minutes, y);
-            y += _row * 1.2f;
-            _custards = NumberField("Custards (1–200)", _custards, y);
-            y += _row * 1.2f;
-
-            GUI.Label(new Rect(0f, y, _width * 0.55f, _row), "Difficulty", _label);
-
-            string[] difficulty =
-            [
-                "Easy",
-                "Normal",
-                "Hard",
-                "Impossible"
-            ];
-            if
-            (
-                GUI.Button
-                (
-                    new Rect(_width * 0.56f, y, _width * 0.44f, _row),
-                    difficulty[Math.Clamp(_difficulty, 0, 3)],
-                    _button
-                )
-            )
-            {
-                _difficulty = (_difficulty + 1) % difficulty.Length;
-            }
-
-            y += _row * 1.2f;
-            GUI.Label(new Rect(0f, y, _width * 0.55f, _row), "Mute Guests", _label);
-            if (GUI.Button(new Rect(_width * 0.56f, y, _width * 0.44f, _row), _muteGuests ? "ON" : "OFF", _button))
+            Choice("Map", _scene ?? "Choose map", _control.Maps.Select(scene => (scene, scene)), value => _scene = value);
+            Choice("Game Mode", _control.Modes.GetValueOrDefault(_mode ?? "") ?? _mode ?? "Choose mode",
+                _control.Modes.Select(mode => (mode.Key, mode.Value)), value => _mode = value);
+            Field("Timer (minutes, 1–60)", _minutes, 3, value => _minutes = value);
+            Field("Custards (1–200)", _custards, 3, value => _custards = value);
+            string[] difficulty = ["Easy", "Normal", "Hard", "Impossible"];
+            Choice("Difficulty", difficulty[Math.Clamp(_difficulty, 0, 3)],
+                difficulty.Select((name, index) => (index.ToString(), name)), value => _difficulty = int.Parse(value));
+            Action("Mute Guests: " + (_muteGuests ? "ON" : "OFF"), () =>
             {
                 _muteGuests = !_muteGuests;
-            }
-
-            y += _row * 1.4f;
-            GUI.Label
-            (
-                new Rect(0f, y, _width, _row * 1.5f),
-                "Starts a fresh round for everyone. Scores, teams and map objects reset.",
-                _small
-            );
-            y += _row * 1.6f;
-
-            if (GUI.Button(new Rect(0f, y, _width, _row * 1.2f), "Start New Round", _button))
+                Page(false);
+            });
+            Label("Starts a fresh round for everyone. Scores, teams and map objects reset.", 23, 72f);
+            Action("Start New Round", () =>
             {
                 if (!int.TryParse(_minutes, out var minutes) || !int.TryParse(_custards, out var custards))
                 {
                     _message = "Enter valid round settings.";
+                    return;
                 }
-                else
-                {
-                    _control.RestartRound(_scene, _mode, minutes, custards, _difficulty, _muteGuests, out var message);
-                    _message = message;
 
-                    if (message == null) Close();
+                _control.RestartRound(_scene, _mode, minutes, custards, _difficulty, _muteGuests, out _message);
+                if (_message == null)
+                {
+                    Close();
                 }
+            });
+        }
+
+        private Slider Range(string title, float value, float minimum, float maximum, Action<float> changed) =>
+            _ui.Range(Line(), title, value, minimum, maximum, changed);
+
+        private void Rendering()
+        {
+            if (_render == null)
+            {
+                Label("Wait for the map to initialize.");
+                return;
+            }
+
+            Action("Fog: " + (_render.Fog ? "ON" : "OFF"), () =>
+            {
+                _render = _render with { Fog = !_render.Fog };
+                Page(false);
+            });
+            Choice("Fog mode", ((FogMode)_render.FogMode).ToString(),
+                Enumerable.Range(1, 3).Select(mode => (mode.ToString(), ((FogMode)mode).ToString())),
+                value => _render = _render with { FogMode = int.Parse(value) });
+            ColorField("Fog color", _render.FogColor, value => _render = _render with { FogColor = value });
+            Range("Fog density", _render.FogDensity, 0f, 0.1f, value => _render = _render with { FogDensity = value });
+            Range("Fog start", _render.FogStart, 0f, 2000f, value =>
+            {
+                _render = _render with { FogStart = value };
+                if (_fogEnd)
+                {
+                    _fogEnd.minValue = value;
+                }
+            });
+            _fogEnd = Range("Fog end", _render.FogEnd, _render.FogStart, 5000f, value => _render = _render with { FogEnd = value });
+
+            var skyboxes = _control.Rendering.Skyboxes.Keys.OrderBy(name => name, StringComparer.Ordinal)
+                .Select(name => (name, name)).Prepend(("", "OFF"));
+            Choice("Skybox", _render.Skybox ? _render.SkyboxName : "OFF", skyboxes, value =>
+                _render = _render with { Skybox = value.Length > 0, SkyboxName = value.Length > 0 ? value : _render.SkyboxName });
+            Field("Skybox image URL", _render.SkyboxUrl ?? "", Customization.Appearance.UrlLimit,
+                value => _render = _render with { SkyboxUrl = value.Trim(), Skybox = value.Trim().Length > 0 || _render.Skybox });
+            Label("Direct PNG/JPEG link, up to 8 MB and 2048 pixels per side. A 2:1 panoramic image wraps around the sky. Clear the URL to use the selected built-in skybox.", 22, 105f);
+            if (_control.Rendering.ImageError != null)
+            {
+                Label(_control.Rendering.ImageError, 22, 70f);
+            }
+
+            Range("Skybox exposure", _render.Exposure, 0f, 5f, value => _render = _render with { Exposure = value });
+
+            ColorField("Ambient color", _render.AmbientColor, value => _render = _render with { AmbientColor = value });
+            Range("Ambient light", _render.AmbientIntensity, 0f, 5f, value => _render = _render with { AmbientIntensity = value });
+            Range("Reflections", _render.ReflectionIntensity, 0f, 2f, value => _render = _render with { ReflectionIntensity = value });
+            Range("Sun light", _render.SunIntensity, 0f, 5f, value => _render = _render with { SunIntensity = value });
+
+            Label("Applies to all players in this room. Original map settings return when you leave.", 23, 72f);
+            Action("Apply Rendering", () =>
+                _control.Access.SetEnvironment(_control.Access.Environment with { Rendering = _render }, out _message));
+            Action("Restore Map Defaults", () =>
+            {
+                _control.Access.SetEnvironment(_control.Access.Environment with { Rendering = null }, out _message);
+                _render = _control.Rendering.Original;
+                Page(false);
+            });
+        }
+
+        private void Check(string title, bool value, Action<bool> changed)
+        {
+            RectTransform row = Line();
+            _ui.Label(row, title, 26);
+            RectTransform box = GameUi.Rect("Check", row);
+            GameUi.Area(box, 0.88f, 0.1f, 0.96f, 0.9f);
+            Image background = _ui.Image(box, new Color(1f, 1f, 1f, 0.15f));
+            Toggle toggle = GameUi.Add<Toggle>(box.gameObject);
+            RectTransform check = GameUi.Rect("Mark", box);
+            GameUi.Area(check, 0.2f, 0.2f, 0.8f, 0.8f);
+            toggle.targetGraphic = background;
+            toggle.graphic = _ui.Image(check, new Color(0.3f, 0.9f, 0.4f));
+            toggle.SetIsOnWithoutNotify(value);
+            toggle.interactable = _control.CanManage;
+            toggle.onValueChanged.AddListener(DelegateSupport.ConvertDelegate<UnityAction<bool>>(changed));
+        }
+
+        private static string[] VectorText(Point3 point) => new[] { point.X, point.Y, point.Z }.Select(value => value.ToString("0.###", CultureInfo.InvariantCulture)).ToArray();
+
+        private static bool ParseVector(string[] values, out Point3 point)
+        {
+            point = null;
+            if (values is not { Length: 3 }) return false;
+
+            float[] parsed = new float[3];
+            for (int index = 0; index < 3; index++)
+                if (!float.TryParse(values[index].Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out parsed[index]) || !float.IsFinite(parsed[index])) return false;
+            point = new Point3(parsed[0], parsed[1], parsed[2]);
+            return true;
+        }
+
+        private void VectorFields(string title, string[] values)
+        {
+            for (int index = 0; index < 3; index++)
+            {
+                int axis = index;
+                Field(title + " " + "XYZ"[index], values[index], 16, value => values[axis] = value);
             }
         }
 
-        private void DrawPlayers()
+        private void World()
         {
-            float y = 0f;
+            Label("Map transform and gravity", 30);
+            VectorFields("Map scale", _worldScale);
+            VectorFields("Map rotation", _worldRotation);
+            VectorFields("Gravity", _worldGravity);
+            Label("Scale: 0.1–10 per axis. Gravity affects props, ragdolls and players. Changes apply to everyone and reset when the room closes.", 22, 85f);
+            Label("NPC navigation follows the original map: this game build has no runtime navigation builder. Large geometry changes can affect AI routes.", 22, 85f);
+            Action("Apply World Settings", () =>
+            {
+                if (!ParseVector(_worldScale, out var scale) || !ParseVector(_worldRotation, out var rotation) || !ParseVector(_worldGravity, out var gravity))
+                {
+                    _message = "Enter finite X, Y and Z values.";
+                    return;
+                }
+
+                WorldSettings world = new(scale, rotation, gravity, _control.Access.Environment.World?.Parts);
+                _control.Access.SetEnvironment(_control.Access.Environment with { World = world }, out _message);
+            });
+            Action("Restore World Defaults", () =>
+            {
+                _control.Access.SetEnvironment(_control.Access.Environment with { World = null }, out _message);
+                _worldScale = VectorText(WorldSettings.Default.Scale);
+                _worldRotation = VectorText(WorldSettings.Default.Rotation);
+                _worldGravity = VectorText(WorldSettings.Default.Gravity);
+                Page(false);
+            });
+
+            Label("Aimed map part: " + _control.Rendering.Geometry.Name(_part), 27, 75f);
+            Label("Aim at a static map object before opening Server Settings. Networked characters, UI and scripted network objects are excluded.", 22, 75f);
+            if (_part == null) return;
+
+            _partPosition ??= VectorText(_part.Position);
+            _partScale ??= VectorText(_part.Scale);
+            _partRotation ??= VectorText(Sandbox.SandboxWorld.Point(Sandbox.SandboxWorld.Quaternion(_part.Rotation).eulerAngles));
+            VectorFields("Part position", _partPosition);
+            VectorFields("Part size", _partScale);
+            VectorFields("Part rotation", _partRotation);
+            ColorField("Part color", _part.Color, value => _part = _part with { Color = value });
+            Action("Visible: " + (_part.Visible ? "ON" : "OFF"), () => { _part = _part with { Visible = !_part.Visible }; Page(false); });
+            Action("Collisions: " + (_part.Solid ? "ON" : "OFF"), () => { _part = _part with { Solid = !_part.Solid }; Page(false); });
+            Action("Apply Map Part", () =>
+            {
+                if (!ParseVector(_partPosition, out var position) || !ParseVector(_partScale, out var size) || !ParseVector(_partRotation, out var angles))
+                {
+                    _message = "Enter finite values for the map part.";
+                    return;
+                }
+
+                MapPart changed = _part with { Position = position, Scale = size, Rotation = Sandbox.SandboxWorld.Rotation(Quaternion.Euler(angles.X, angles.Y, angles.Z)) };
+                WorldSettings world = _control.Access.Environment.World ?? WorldSettings.Default;
+                MapPart[] parts = (world.Parts ?? Array.Empty<MapPart>()).Where(part => part.Path != changed.Path).Append(changed).ToArray();
+                _control.Access.SetEnvironment(_control.Access.Environment with { World = world with { Parts = parts } }, out _message);
+
+                if (_message == null)
+                {
+                    _part = changed;
+                }
+            });
+            Action("Restore Map Part", () =>
+            {
+                WorldSettings world = _control.Access.Environment.World ?? WorldSettings.Default;
+                _control.Access.SetEnvironment(_control.Access.Environment with { World = world with { Parts = world.Parts?.Where(part => part.Path != _part.Path).ToArray() } }, out _message);
+            });
+        }
+
+        private void Players()
+        {
+            if (_control.Access.Players.Count == 0)
+            {
+                Label("No players connected.");
+            }
 
             foreach (RoomPlayer player in _control.Access.Players)
             {
-                int id = player.Id;
-                GUI.Label
-                (
-                    new Rect(0f, y, _width * 0.6f, _row),
-                    player.Nickname + (id == 0 ? " (Host)" : player.Trusted ? " (Admin)" : ""),
-                    _label
-                );
-                GUI.Label
-                (
-                    new Rect(0f, y + _row, _width * 0.6f, _row),
-                    $"Account: {player.Account} · ID: {id}" + (player.Guest ? " · Guest" : ""),
-                    _small
-                );
+                RectTransform row = Line(160f);
+                Text name = _ui.Label(row, player.Nickname + (player.Id == 0 ? " (Host)" : player.Trusted ? " (Admin)" : ""), 30);
+                GameUi.Area(name.rectTransform, 0f, 0.62f, 0.6f, 1f);
+                Text account = _ui.Label(row, $"Account: {player.Account} · ID: {player.Id}" + (player.Guest ? " · Guest" : ""), 22);
+                GameUi.Area(account.rectTransform, 0f, 0.32f, 0.6f, 0.62f);
+                if (player.Id == 0) continue;
 
-                if (id != 0)
+                Button kick = _ui.Button(row, "KICK", () => _control.Kick(player.Id, player.Account, false, out _message));
+                GameUi.Area(kick.GetComponent<RectTransform>(), 0.64f, 0.62f, 0.8f, 1f);
+                Button ban = _ui.Button(row, "BAN", () => _control.Kick(player.Id, player.Account, true, out _message));
+                GameUi.Area(ban.GetComponent<RectTransform>(), 0.82f, 0.62f, 1f, 1f);
+                ban.interactable = !player.Guest;
+                Button mute = _ui.Button(row, player.Muted ? "UNMUTE CHAT" : "MUTE CHAT",
+                    () => _control.Access.SetMuted(player.Id, player.Account, !player.Muted, out _message));
+                GameUi.Area(mute.GetComponent<RectTransform>(), 0.64f, 0.22f, 1f, 0.6f);
+                if (_control.CanManage)
                 {
-                    if (ActionButton(new Rect(_width * 0.64f, y, _width * 0.16f, _row), "KICK", new Color(1f, 0.65f, 0.2f)))
-                    {
-                        _control.Kick(id, player.Account, false, out var message);
-                        _message = message;
-                    }
-
-                    bool enabled = GUI.enabled;
-                    GUI.enabled = enabled && !player.Guest;
-
-                    if (ActionButton(new Rect(_width * 0.82f, y, _width * 0.18f, _row), "BAN", new Color(1f, 0.3f, 0.3f)))
-                    {
-                        _control.Kick(id, player.Account, true, out var message);
-                        _message = message;
-                    }
-
-                    GUI.enabled = enabled;
-                    if (GUI.Button
-                    (
-                        new Rect(_width * 0.64f, y + _row * 1.1f, _width * 0.36f, _row),
-                        player.Muted ? "UNMUTE CHAT" : "MUTE CHAT",
-                        _button
-                    ))
-                    {
-                        _control.Access.SetMuted(id, player.Account, !player.Muted, out var message);
-                        _message = message;
-                    }
-
-                    if 
-                    (
-                        _control.CanManage &&
-                        GUI.Button
-                        (
-                            new Rect(0f, y + _row * 2f, _width * 0.6f, _row * 0.85f),
-                            player.Trusted ? "Revoke Server Settings Access" : "Grant Server Settings Access",
-                            _button
-                        )
-                    )
-                    {
-                        _control.Access.SetTrusted(id, player.Account, !player.Trusted, out var message);
-                        _message = message;
-                    }
+                    Button trusted = _ui.Button(row, player.Trusted ? "Revoke Server Settings Access" : "Grant Server Settings Access",
+                        () => _control.Access.SetTrusted(player.Id, player.Account, !player.Trusted, out _message));
+                    GameUi.Area(trusted.GetComponent<RectTransform>(), 0f, 0f, 0.6f, 0.3f);
                 }
-
-                y += _row * 3.1f;
             }
         }
 
-        private void DrawMutes()
+        private void Accounts(bool muted)
         {
-            GUI.Label
-            (
-                new Rect(0f, 0f, _width, _row * 2f),
-                _control.Access.Mutes.LoadError ??
-                "Chat mutes use account names and remain until removed. Nickname changes do not remove a mute.",
-                _small
-            );
-
-            float y = _row * 2.2f;
-
-            foreach (BanEntry entry in _control.Access.MutedAccounts.ToArray())
+            Label(muted ? _control.Access.Mutes.LoadError ??
+                "Chat mutes use account names and remain until removed. Nickname changes do not remove a mute." :
+                _control.Bans.LoadError ?? "Bans use authenticated accounts and survive nickname changes. Guest accounts cannot be banned persistently.", 23, 90f);
+            IReadOnlyList<BanEntry> entries = muted ? _control.Access.MutedAccounts : _control.Access.Bans;
+            if (entries.Count == 0)
             {
-                GUI.Label(new Rect(0f, y, _width * 0.72f, _row), entry.Nickname, _label);
-                GUI.Label(new Rect(0f, y + _row, _width * 0.72f, _row), entry.Account, _small);
-
-                if (GUI.Button(new Rect(_width * 0.76f, y, _width * 0.24f, _row), "UNMUTE", _button))
-                {
-                    _control.Access.SetMuted(-1, entry.Account, false, out var message);
-                    _message = message;
-                }
-
-                y += _row * 2f;
+                Label(muted ? "No muted accounts." : "No banned accounts.");
             }
-        }
 
-        private void DrawBans()
-        {
-            GUI.Label
-            (
-                new Rect(0f, 0f, _width, _row * 2f),
-                _control.Bans.LoadError ??
-                "Bans use authenticated accounts and survive nickname changes. Guest accounts cannot be banned persistently.",
-                _small
-            );
-
-            float y = _row * 2.2f;
-
-            foreach (BanEntry entry in _control.Access.Bans.ToArray())
+            foreach (BanEntry entry in entries.ToArray())
             {
-                GUI.Label(new Rect(0f, y, _width * 0.72f, _row), entry.Account, _label);
-                GUI.Label
-                (
-                    new Rect(0f, y + _row, _width * 0.72f, _row),
-                    entry.Nickname + " · " + entry.CreatedAt.ToLocalTime().ToString("g"),
-                    _small
-                );
-
-                if (GUI.Button(new Rect(_width * 0.76f, y, _width * 0.24f, _row), "UNBAN", _button))
+                RectTransform row = Line(110f);
+                Text name = _ui.Label(row, muted ? entry.Nickname : entry.Account, 28);
+                GameUi.Area(name.rectTransform, 0f, 0.5f, 0.7f, 1f);
+                Text detail = _ui.Label(row, muted ? entry.Account : entry.Nickname + " · " + entry.CreatedAt.ToLocalTime().ToString("g"), 22);
+                GameUi.Area(detail.rectTransform, 0f, 0f, 0.7f, 0.5f);
+                Button remove = _ui.Button(row, muted ? "UNMUTE" : "UNBAN", () =>
                 {
-                    _control.Unban(entry.Account, out var message);
-                    _message = message;
-                }
-
-                y += _row * 2f;
+                    if (muted)
+                    {
+                        _control.Access.SetMuted(-1, entry.Account, false, out _message);
+                    }
+                    else
+                    {
+                        _control.Unban(entry.Account, out _message);
+                    }
+                });
+                GameUi.Area(remove.GetComponent<RectTransform>(), 0.76f, 0.5f, 1f, 1f);
             }
-        }
-
-        private Rect Line(float index) => new(0f, _row * index, _width, _row);
-
-        internal static Texture2D ButtonBackground(Color fill, Color border)
-        {
-            Texture2D texture = new(3, 3, TextureFormat.RGBA32, false)
-
-            {
-                filterMode = FilterMode.Point,
-                wrapMode = TextureWrapMode.Clamp,
-                hideFlags = HideFlags.HideAndDontSave
-            };
-
-            Color[] pixels = Enumerable.Repeat(border, 9).ToArray();
-            pixels[4] = fill;
-
-            texture.SetPixels(new Il2CppStructArray<Color>(pixels));
-            texture.Apply();
-
-            return texture;
-        }
-
-        private string NumberField(string label, string value, float y)
-        {
-            GUI.Label(new Rect(0f, y, _width * 0.55f, _row), label, _label);
-
-            return GUI.TextField(new Rect(_width * 0.56f, y, _width * 0.44f, _row), value, 3, _input);
-        }
-
-        private bool ActionButton(Rect rect, string text, Color color)
-        {
-            Color previous = GUI.contentColor;
-            GUI.contentColor = color;
-
-            bool clicked = GUI.Button(rect, text, _button);
-
-            GUI.contentColor = previous;
-
-            return clicked;
         }
     }
 }

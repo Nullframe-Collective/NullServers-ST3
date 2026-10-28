@@ -1,7 +1,9 @@
-using HarmonyLib;
+﻿using HarmonyLib;
 using Il2Cpp;
 using Il2CppFishNet.Connection;
+using Il2CppFishNet.Object;
 using Il2CppInterop.Runtime;
+using NullServers.Customization;
 using NullServers.Network;
 using UnityEngine;
 using Object = UnityEngine.Object;
@@ -16,13 +18,14 @@ namespace NullServers.Sandbox
             internal GameObject Root;
             internal Rigidbody[] Physics;
             internal Transform[] Bones;
-            internal Vector3[] Positions;
-            internal Quaternion[] Rotations;
+            internal PhysicsBuffer[] Motion;
             internal int[] Sequences;
-            internal (bool Kinematic, bool Gravity, bool Collisions)[] Original;
             internal bool Copy;
             internal float NextSend;
             internal float CreatedAt;
+            internal float DestroyAt;
+            internal float BindAt;
+            internal RagdollVisual Visual;
         }
 
         private static RagdollSync _instance;
@@ -35,6 +38,8 @@ namespace NullServers.Sandbox
         private float _nextScan;
         private float _poseAt;
         private int _sourcePlayer = -1;
+        private RagdollSkin _sourceSkin;
+        private bool _creatingLiving;
 
         internal RagdollSync(HarmonyLib.Harmony harmony, SandboxWorld world)
         {
@@ -46,29 +51,47 @@ namespace NullServers.Sandbox
                 postfix: new HarmonyMethod(typeof(RagdollSync), nameof(Created)));
 
             harmony.Patch(
+                AccessTools.Method(typeof(RagdollController), "Start"),
+                prefix: new HarmonyMethod(typeof(RagdollSync), nameof(BeforeFreeze)));
+
+            harmony.Patch(
+                AccessTools.Method(typeof(RagdollMode), nameof(RagdollMode.OnEnable)),
+                prefix: new HarmonyMethod(typeof(RagdollSync), nameof(BeforeEnable)));
+
+            harmony.Patch(
+                AccessTools.Method(typeof(WaitForDestroy), nameof(WaitForDestroy.Awake)),
+                prefix: new HarmonyMethod(typeof(RagdollSync), nameof(BeforeCorpseTimer)));
+
+            harmony.Patch(
+                AccessTools.Method(typeof(DeadBot), nameof(DeadBot.Start)),
+                prefix: new HarmonyMethod(typeof(RagdollSync), nameof(BeforeDeadBot)));
+
+            harmony.Patch(
                 AccessTools.Method(typeof(PlayerDamage), nameof(PlayerDamage.KDDDGBFEFOC)),
                 prefix: new HarmonyMethod(typeof(RagdollSync), nameof(BeforeDeath)),
                 finalizer: new HarmonyMethod(typeof(RagdollSync), nameof(AfterDeath)));
         }
 
-        private static void BeforeDeath(PlayerDamage __instance, out int __state)
+        private static void BeforeDeath(PlayerDamage __instance, out (int Player, RagdollSkin Skin) __state)
         {
-            __state = _instance._sourcePlayer;
+            __state = (_instance._sourcePlayer, _instance._sourceSkin);
             _instance._sourcePlayer = SandboxWorld.DamageOwner(__instance);
+            _instance._sourceSkin = _instance._world.Active ? RagdollSkin.Capture(_instance._sourcePlayer, __instance) : null;
         }
 
-        private static Exception AfterDeath(PlayerDamage __instance, Exception __exception, int __state)
+        private static Exception AfterDeath(PlayerDamage __instance, Exception __exception, (int Player, RagdollSkin Skin) __state)
         {
             try
             {
-                if (__exception == null && _instance._world.Active && __instance && (float)__instance.PIIDNIGPCDK <= 0f)
+                if (__exception == null && _instance._world.Active && __instance && __instance.Health <= 0f)
                 {
                     _instance.Scan();
                 }
             }
             finally
             {
-                _instance._sourcePlayer = __state;
+                _instance._sourcePlayer = __state.Player;
+                _instance._sourceSkin = __state.Skin;
             }
 
             return __exception;
@@ -82,28 +105,309 @@ namespace NullServers.Sandbox
             }
         }
 
-        internal void Register(GameObject root)
+        private static bool BeforeFreeze() => !_instance._world.Active;
+
+        private static bool BeforeEnable(RagdollMode __instance)
+        {
+            RagdollSync sync = _instance;
+            if (!sync._world.Active) return true;
+
+            MecanimControl model = __instance.Mecanim;
+            if (!model || __instance.VisualRenderers == null || __instance.PhysicalRenderers == null) return true;
+
+            PlayerDamage damage = __instance.GetComponentInParent<PlayerDamage>();
+            int player = sync._sourcePlayer >= 0 ? sync._sourcePlayer : damage ? SandboxWorld.DamageOwner(damage) : -1;
+            RagdollSkin skin = sync._sourceSkin ?? (player >= 0 ? RagdollSkin.Capture(player, damage) : null);
+            foreach (Behaviour behaviour in model.GetComponentsInChildren<Behaviour>(true))
+                if (behaviour.TryCast<Animator>() || behaviour.TryCast<Animation>() || behaviour.TryCast<MecanimControl>() ||
+                    behaviour.TryCast<HeadLookController>() || behaviour.TryCast<CharacterAnimation>()) behaviour.enabled = false;
+            model.gameObject.SetActive(true);
+            model.transform.SetParent(__instance.transform, false);
+            model.transform.localPosition = Vector3.zero;
+            model.transform.localRotation = Quaternion.identity;
+
+            int count = Math.Min(__instance.VisualRenderers.Length, __instance.PhysicalRenderers.Length);
+            for (int index = 0; index < count; index++)
+            {
+                SkinnedMeshRenderer visual = __instance.VisualRenderers[index];
+                SkinnedMeshRenderer physical = __instance.PhysicalRenderers[index];
+                if (!visual || !physical) continue;
+
+                Transform[] from = visual.bones.ToArray(), to = physical.bones.ToArray();
+                for (int bone = 0; bone < Math.Min(from.Length, to.Length); bone++)
+                {
+                    if (!from[bone] || !to[bone] || from[bone] == to[bone]) continue;
+
+                    from[bone].SetParent(to[bone], false);
+                    from[bone].localPosition = Vector3.zero;
+                    from[bone].localRotation = Quaternion.identity;
+                    from[bone].localScale = Vector3.one;
+                }
+            }
+
+            __instance.transform.SetParent(null, true);
+            int previousPlayer = sync._sourcePlayer;
+            RagdollSkin previousSkin = sync._sourceSkin;
+
+            try
+            {
+                sync._sourcePlayer = player;
+                sync._sourceSkin = skin;
+                sync.Register(__instance.gameObject);
+                Body body = sync._bodies.Values.FirstOrDefault(body => body.Root == __instance.gameObject);
+
+                if (body != null)
+                {
+                    body.DestroyAt = Time.unscaledTime + 10f;
+                }
+            }
+            finally
+            {
+                sync._sourcePlayer = previousPlayer;
+                sync._sourceSkin = previousSkin;
+            }
+
+            return false;
+        }
+
+        private static bool BeforeCorpseTimer(WaitForDestroy __instance)
+        {
+            RagdollSync sync = _instance;
+            GameObject root = __instance.gameObject;
+            bool corpse = root.name.Contains("ragdoll", StringComparison.OrdinalIgnoreCase) || root.GetComponentsInChildren<CharacterJoint>(true).Length > 0;
+            if (!sync._world.Active || !corpse || root.GetComponentsInChildren<Rigidbody>(true).Length == 0) return true;
+
+            sync.OwnLifetime(root, __instance.Delay);
+            return false;
+        }
+
+        private static bool BeforeDeadBot(DeadBot __instance)
+        {
+            RagdollSync sync = _instance;
+            if (!sync._world.Active) return true;
+
+            if (__instance.Mecanim && __instance.DeathAnimations is { Length: > 0 } animations)
+            {
+                __instance.Mecanim.Play(animations[UnityEngine.Random.Range(0, animations.Length)], 0.1f);
+            }
+
+            EnsurePhysics(__instance.gameObject);
+            sync.OwnLifetime(__instance.gameObject, __instance.DestroyDelay);
+            return false;
+        }
+
+        private void OwnLifetime(GameObject root, float seconds)
+        {
+            Register(root);
+            Body body = _bodies.Values.FirstOrDefault(body => body.Root == root);
+
+            if (body != null)
+            {
+                body.DestroyAt = Time.unscaledTime + (float.IsFinite(seconds) ? Mathf.Clamp(seconds, 0.01f, 86400f) : 10f);
+            }
+        }
+
+        private static void EnsurePhysics(GameObject root)
+        {
+            if (root.GetComponentsInChildren<Rigidbody>(true).Length > 0) return;
+
+            Bounds bounds = SandboxAssets.BoundsOf(root);
+            Vector3 scale = root.transform.lossyScale;
+
+            if (!root.GetComponentsInChildren<Collider>(true).Any(collider => collider.enabled && !collider.isTrigger))
+            {
+                BoxCollider collider = root.AddComponent<BoxCollider>();
+                collider.center = root.transform.InverseTransformPoint(bounds.center);
+                collider.size = new Vector3(bounds.size.x / Mathf.Max(0.001f, Mathf.Abs(scale.x)),
+                    bounds.size.y / Mathf.Max(0.001f, Mathf.Abs(scale.y)), bounds.size.z / Mathf.Max(0.001f, Mathf.Abs(scale.z)));
+            }
+
+            Rigidbody body = root.AddComponent<Rigidbody>();
+            body.mass = Mathf.Clamp(bounds.size.x * bounds.size.y * bounds.size.z, 1f, 100f);
+        }
+
+        internal GameObject Root(int id) => _bodies.GetValueOrDefault(id)?.Root;
+        internal Rigidbody PhysicsBody(int id, int bone) => _bodies.TryGetValue(id, out var body) && body.Physics != null && bone >= 0 && bone < body.Physics.Length ? body.Physics[bone] : null;
+
+        internal bool Pick(RaycastHit hit, out int id, out int bone)
+        {
+            id = bone = 0;
+            foreach (var pair in _bodies)
+            {
+                Body body = pair.Value;
+                if (!body.Root || !hit.transform.IsChildOf(body.Root.transform) && hit.transform != body.Root.transform) continue;
+
+                id = pair.Key;
+                if (body.Physics != null)
+                {
+                    int index = Array.FindIndex(body.Physics, value => value && value == hit.rigidbody);
+                    bone = Math.Max(0, index);
+                }
+
+                return true;
+            }
+
+            return false;
+        }
+
+        internal void Throw(int id, Vector3 velocity)
+        {
+            if (!_bodies.TryGetValue(id, out var body) || body.Physics == null) return;
+
+            foreach (Rigidbody part in body.Physics)
+            {
+                if (!part) continue;
+
+                part.isKinematic = false;
+                part.velocity = velocity;
+                part.angularVelocity = Vector3.zero;
+                part.WakeUp();
+            }
+        }
+
+        internal static GameObject CloneBody(GameObject prefab)
+        {
+            GameObject holder = new("NullFrameBodyStaging");
+            holder.SetActive(false);
+            GameObject root = Object.Instantiate(prefab, holder.transform, false);
+            root.SetActive(false);
+
+            foreach (Component component in root.GetComponentsInChildren<Component>(true))
+            {
+                if (!component || component.TryCast<Transform>() || component.TryCast<Renderer>() || component.TryCast<MeshFilter>() ||
+                    component.TryCast<Rigidbody>() || component.TryCast<Collider>() || component.TryCast<Joint>()) continue;
+                Object.DestroyImmediate(component);
+            }
+
+            root.name = prefab.name;
+            root.transform.SetParent(null, false);
+            Object.Destroy(holder);
+            return root;
+        }
+
+        private static GameObject PrepareLivingBody(GameObject prefab, GameObject source, int player)
+        {
+            GameObject root = CloneBody(prefab);
+            if (player < 0) return root;
+
+            PlayerNetworkController avatar = source.GetComponent<PlayerNetworkController>();
+            Transform model = avatar ? avatar.Model : null;
+            if (!model) return root;
+
+            foreach (Renderer renderer in root.GetComponentsInChildren<Renderer>(true))
+            {
+                renderer.enabled = false;
+            }
+
+            var physical = root.GetComponentsInChildren<Transform>(true).GroupBy(node => node.name)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+            GameObject visual = SandboxAssets.CloneVisual(model.gameObject, "NullFrameBodyModel");
+            visual.transform.SetParent(root.transform, false);
+            visual.transform.localPosition = Vector3.zero;
+            visual.transform.localRotation = Quaternion.identity;
+            visual.transform.localScale = model.localScale;
+
+            foreach (Behaviour behaviour in visual.GetComponentsInChildren<Behaviour>(true))
+            {
+                behaviour.enabled = false;
+            }
+
+            Transform[] bones = visual.GetComponentsInChildren<SkinnedMeshRenderer>(true)
+                .SelectMany(renderer => renderer.bones).Where(node => node).DistinctBy(node => node.Pointer).ToArray();
+            foreach (Transform bone in bones)
+            {
+                if (!physical.TryGetValue(bone.name, out var target)) continue;
+
+                bone.SetParent(target, false);
+                bone.localPosition = Vector3.zero;
+                bone.localRotation = Quaternion.identity;
+                bone.localScale = Vector3.one;
+            }
+
+            return root;
+        }
+
+        internal bool CreateLiving(GameObject prefab, GameObject source, int player, out int id)
+        {
+            id = 0;
+            if (_bodies.Count >= 512) return false;
+
+            GameObject root = PrepareLivingBody(prefab, source, player);
+            root.transform.SetPositionAndRotation(source.transform.position, source.transform.rotation);
+            root.transform.localScale = source.transform.lossyScale;
+            var sourceBones = source.GetComponentsInChildren<Transform>(true).GroupBy(value => value.name).ToDictionary(group => group.Key, group => group.First());
+
+            foreach (Rigidbody part in root.GetComponentsInChildren<Rigidbody>(true))
+            {
+                if (sourceBones.TryGetValue(part.name, out var original))
+                {
+                    part.transform.SetPositionAndRotation(original.position, original.rotation);
+                }
+
+                part.isKinematic = false;
+            }
+
+            int previous = _sourcePlayer;
+            RagdollSkin skin = _sourceSkin;
+
+            try
+            {
+                _creatingLiving = true;
+                _sourcePlayer = player;
+                _sourceSkin = player >= 0 ? RagdollSkin.Capture(player, SandboxWorld.Avatar(player)?.Damage) : null;
+                root.SetActive(true);
+                EnsurePhysics(root);
+                Register(root, player < 0 ? source.GetComponent<NetworkObject>()?.ObjectId ?? -1 : -1);
+                Body body = _bodies.Values.FirstOrDefault(body => body.Root == root);
+                id = body?.Definition.Id ?? 0;
+            }
+            finally
+            {
+                _creatingLiving = false;
+                _sourcePlayer = previous;
+                _sourceSkin = skin;
+            }
+
+            if (id == 0)
+            {
+                Object.Destroy(root);
+            }
+
+            return id > 0;
+        }
+
+        internal void Register(GameObject root, int npc = -1)
         {
             if (!root || !root.scene.IsValid() || _local.ContainsKey(root.Pointer)) return;
 
             Rigidbody[] physics = root.GetComponentsInChildren<Rigidbody>(true).ToArray();
-            if (physics.Length is < 2 or > 64) return;
+            if (physics.Length is < 1 or > 64) return;
+
+            if (_world.IsHost && _bodies.Count >= 512)
+            {
+                var oldest = _bodies.Where(pair => !pair.Value.Definition.Living && !_world.Hands.HeldObjects.Contains(pair.Key))
+                    .OrderBy(pair => pair.Value.CreatedAt).FirstOrDefault();
+                if (oldest.Value == null) return;
+
+                Remove(oldest.Key);
+                _world.Send(_world.Message(SandboxKind.RemoveRagdoll) with { Id = oldest.Key });
+                _world.SetStatus("Ragdoll limit reached: the oldest unheld corpse was removed (512 per room).");
+            }
 
             _local[root.Pointer] = root;
             _players[root.Pointer] = _sourcePlayer;
 
             if (!_world.IsHost)
             {
-                foreach 
-                (
-                    Body copy in _bodies.Values.Where(body => body.Copy &&
+                foreach (Body copy in _bodies.Values.Where(body => body.Copy &&
                     body.Root &&
                     body.Definition.Name == root.name.Replace("(Clone)", "").Trim() &&
                     (body.Definition.Player < 0 || body.Definition.Player == _sourcePlayer) &&
-                    Vector3.Distance(root.transform.position, SandboxWorld.Vector(body.Definition.Position)) < 8f)
-                )
+                    Vector3.Distance(root.transform.position, SandboxWorld.Vector(body.Definition.Position)) < 8f))
                 {
                     _bound.Remove(copy.Root.Pointer);
+                    copy.Visual?.Dispose();
+                    copy.Visual = null;
                     Object.Destroy(copy.Root);
                     copy.Root = null;
                     copy.Bones = null;
@@ -115,28 +419,88 @@ namespace NullServers.Sandbox
 
             string[] paths = physics.Select(body => Path(root.transform, body.transform)).ToArray();
 
-            RagdollDefinition definition = new
-            (
+            RagdollDefinition definition = new(
                 _nextId++,
                 root.name.Replace("(Clone)", "").Trim(),
                 SandboxWorld.Point(root.transform.position),
                 paths,
-                _sourcePlayer
-            );
+                _sourcePlayer,
+                _sourceSkin,
+                _creatingLiving,
+                SandboxWorld.Point(root.transform.localScale),
+                npc);
 
             Body state = new()
             {
                 Definition = definition,
                 Root = root,
                 Physics = physics,
+                CreatedAt = Time.unscaledTime,
                 Bones = physics.Select(body => body.transform).ToArray()
             };
+            if (definition.Skin != null)
+            {
+                state.Visual = new RagdollVisual(root, definition.Skin, _world.Assets.Textures);
+            }
 
+            Stabilize(root, physics);
             _bodies[definition.Id] = state;
             _world.Send(_world.Message(SandboxKind.Ragdoll) with
             {
                 Ragdoll = definition
             });
+        }
+
+        private static void Stabilize(GameObject root, Rigidbody[] physics)
+        {
+            foreach (Rigidbody part in physics)
+            {
+                part.solverIterations = Mathf.Max(part.solverIterations, 12);
+                part.solverVelocityIterations = Mathf.Max(part.solverVelocityIterations, 4);
+                part.maxDepenetrationVelocity = 3f;
+                part.maxAngularVelocity = 12f;
+            }
+
+            Collider[] colliders = root.GetComponentsInChildren<Collider>(true).Where(value => !value.isTrigger).ToArray();
+            for (int first = 0; first < colliders.Length; first++)
+            {
+                for (int second = first + 1; second < colliders.Length; second++)
+                {
+                    Physics.IgnoreCollision(colliders[first], colliders[second], true);
+                }
+            }
+
+            foreach (CharacterJoint joint in root.GetComponentsInChildren<CharacterJoint>(true))
+            {
+                joint.enableCollision = false;
+                joint.enableProjection = true;
+                joint.projectionDistance = 0.1f * Mathf.Max(0.25f, root.transform.lossyScale.y);
+                joint.projectionAngle = 15f;
+            }
+        }
+
+        internal void DisplayGrip(int id, int bone, Vector3 localPoint, Vector3 target, Quaternion rotation)
+        {
+            if (!_bodies.TryGetValue(id, out var body) || !body.Root || body.Physics == null || bone < 0 || bone >= body.Physics.Length)
+            {
+                return;
+            }
+
+            Rigidbody anchor = body.Physics[bone];
+            if (!anchor)
+            {
+                return;
+            }
+
+            Vector3 position = RigidGrip.Position(anchor, localPoint, target, rotation);
+            Quaternion delta = rotation * Quaternion.Inverse(anchor.rotation);
+            Vector3 origin = anchor.position;
+            var poses = body.Bones.Where(value => value).Select(value =>
+                (Bone: value, Position: position + delta * (value.position - origin), Rotation: delta * value.rotation)).ToArray();
+            foreach (var pose in poses)
+            {
+                pose.Bone.SetPositionAndRotation(pose.Position, pose.Rotation);
+            }
         }
 
         internal void Define(RagdollDefinition definition)
@@ -151,8 +515,7 @@ namespace NullServers.Sandbox
             {
                 Definition = definition,
                 CreatedAt = Time.unscaledTime,
-                Positions = new Vector3[definition.Bones.Length],
-                Rotations = new Quaternion[definition.Bones.Length],
+                Motion = Enumerable.Range(0, definition.Bones.Length).Select(_ => new PhysicsBuffer()).ToArray(),
                 Sequences = new int[definition.Bones.Length]
             };
         }
@@ -170,17 +533,13 @@ namespace NullServers.Sandbox
 
                 for (int offset = 0; offset < body.Bones.Length; offset += PhysicsPacket.MaxPoses)
                 {
-                    PhysicsPose[] poses = body.Bones.Skip(offset).Take(PhysicsPacket.MaxPoses).Select
-                    (
+                    PhysicsPose[] poses = body.Bones.Skip(offset).Take(PhysicsPacket.MaxPoses).Select(
                         (bone, index) =>
-                        new PhysicsPose
-                        (
+                        new PhysicsPose(
                             body.Definition.Id,
                             (byte)(offset + index),
                             SandboxWorld.Point(bone.position),
-                            SandboxWorld.Rotation(bone.rotation)
-                        )
-                    ).ToArray();
+                            SandboxWorld.Rotation(bone.rotation))).ToArray();
 
                     _world.Queue(_world.Message(SandboxKind.PoseBatch) with
                     {
@@ -225,8 +584,7 @@ namespace NullServers.Sandbox
         private bool Bind(Body body)
         {
             RagdollDefinition definition = body.Definition;
-            GameObject root = 
-                _local.Values.Where(value => value &&
+            GameObject root = _local.Values.Where(value => value &&
                 !_bound.Contains(value.Pointer) &&
                 value.name.Replace("(Clone)", "").Trim() == definition.Name &&
                 (definition.Player < 0 || _players.GetValueOrDefault(value.Pointer, -1) == definition.Player) &&
@@ -237,16 +595,47 @@ namespace NullServers.Sandbox
             {
                 if (Time.unscaledTime - body.CreatedAt < 1f) return false;
 
-                GameObject prefab = 
-                    Resources.FindObjectsOfTypeAll<GameObject>().FirstOrDefault(value => !value.scene.IsValid() &&
+                GameObject prefab = Resources.FindObjectsOfTypeAll<GameObject>().FirstOrDefault(value => !value.scene.IsValid() &&
                     value.name == definition.Name &&
-                    value.GetComponentInChildren(Il2CppType.Of<RagdollController>(), true));
+                    value.GetComponentsInChildren<Rigidbody>(true).Length == definition.Bones.Length);
+
+                PlayerNetworkController player = definition.Living && definition.Player >= 0 ? SandboxWorld.Avatar(definition.Player) : null;
+                if (player && player.Damage && player.Damage.RagdollPrefab)
+                {
+                    prefab = player.Damage.RagdollPrefab.gameObject;
+                }
+
+                if (definition.Living && definition.NPC >= 0)
+                {
+                    GameObject source = SandboxWorld.Spawned(definition.NPC);
+                    Bot npc = source ? source.GetComponent<Bot>() : null;
+                    BossBot boss = source ? source.GetComponent<BossBot>() : null;
+
+                    if (npc && npc.RagdollPrefab)
+                    {
+                        prefab = npc.RagdollPrefab.gameObject;
+                    }
+                    else if (boss && boss.RagdollPrefab)
+                    {
+                        prefab = boss.RagdollPrefab.gameObject;
+                    }
+                }
 
                 if (!prefab) return false;
 
-                root = SandboxAssets.CloneVisual(prefab, "NullFrameSyncedRagdoll");
+                root = player ? PrepareLivingBody(prefab, player.gameObject, definition.Player) : CloneBody(prefab);
                 root.transform.position = SandboxWorld.Vector(definition.Position);
+
+                if (definition.Scale != null)
+                {
+                    root.transform.localScale = SandboxWorld.Vector(definition.Scale);
+                }
+
+                root.SetActive(true);
+                EnsurePhysics(root);
                 body.Copy = true;
+                _local[root.Pointer] = root;
+                _players[root.Pointer] = definition.Player;
             }
 
             Transform[] bones = definition.Bones.Select(path => Resolve(root.transform, path)).ToArray();
@@ -262,26 +651,22 @@ namespace NullServers.Sandbox
 
             body.Root = root;
             body.Bones = bones;
-            body.Physics = root.GetComponentsInChildren<Rigidbody>(true).ToArray();
-            body.Original = body.Physics.Select(value => (value.isKinematic, value.useGravity, value.detectCollisions)).ToArray();
+            body.Physics = bones.Select(value => value.GetComponent<Rigidbody>()).ToArray();
 
             foreach (Rigidbody value in body.Physics)
             {
+                if (!value) continue;
+
                 value.isKinematic = true;
                 value.useGravity = false;
-                value.detectCollisions = false;
-            }
-
-            for (int index = 0; index < bones.Length; index++)
-            {
-                if (body.Sequences[index] == 0)
-                {
-                    body.Positions[index] = bones[index].position;
-                    body.Rotations[index] = bones[index].rotation;
-                }
+                value.detectCollisions = true;
             }
 
             _bound.Add(root.Pointer);
+            if (definition.Skin != null)
+            {
+                body.Visual = new RagdollVisual(root, definition.Skin, _world.Assets.Textures);
+            }
 
             return true;
         }
@@ -320,9 +705,21 @@ namespace NullServers.Sandbox
 
             if (!_world.IsHost)
             {
-                foreach (Body body in _bodies.Values.Where(body => body.Bones == null))
+                foreach (Body body in _bodies.Values)
                 {
-                    Bind(body);
+                    if (!body.Root && body.Bones != null)
+                    {
+                        body.Visual?.Dispose();
+                        body.Visual = null;
+                        body.Bones = null;
+                        body.Copy = false;
+                    }
+
+                    if (body.Bones == null && Time.unscaledTime >= body.BindAt)
+                    {
+                        body.BindAt = Time.unscaledTime + 1f;
+                        Bind(body);
+                    }
                 }
 
                 return;
@@ -330,14 +727,23 @@ namespace NullServers.Sandbox
 
             if (Time.unscaledTime < _poseAt) return;
 
-            _poseAt = Time.unscaledTime + 0.1f;
+            _poseAt = Time.unscaledTime + 0.05f;
 
             foreach (var pair in _bodies.ToArray())
             {
                 Body body = pair.Value;
+                if (body.Root && !body.Definition.Living && !_world.Environment.KeepRagdolls && body.DestroyAt > 0f &&
+                    Time.unscaledTime >= body.DestroyAt && !_world.Hands.HeldObjects.Contains(pair.Key))
+                {
+                    Remove(pair.Key);
+                    _world.Send(_world.Message(SandboxKind.RemoveRagdoll) with { Id = pair.Key });
+                    continue;
+                }
+
                 if (!body.Root)
                 {
                     _bodies.Remove(pair.Key);
+                    body.Visual?.Dispose();
                     _world.Physics.Forget(pair.Key);
                     _world.Send(_world.Message(SandboxKind.RemoveRagdoll) with
                     {
@@ -350,7 +756,7 @@ namespace NullServers.Sandbox
                 if (Time.unscaledTime < body.NextSend) continue;
 
                 bool sleeping = body.Physics.All(value => !value || value.IsSleeping());
-                body.NextSend = Time.unscaledTime + (sleeping ? 0.5f : 0.1f);
+                body.NextSend = Time.unscaledTime + (sleeping ? 0.5f : 0.05f);
 
                 for (byte index = 0; index < body.Bones.Length; index++)
                 {
@@ -359,60 +765,58 @@ namespace NullServers.Sandbox
             }
         }
 
-        internal void Pose(PhysicsPose pose, int sequence)
+        internal void Pose(PhysicsPose pose, int sequence, double stamp)
         {
-            if 
-            (
-                !_bodies.TryGetValue(pose.Id, out var body) ||
+            if (!_bodies.TryGetValue(pose.Id, out var body) ||
                 pose.Bone >= body.Definition.Bones.Length ||
-                sequence <= body.Sequences[pose.Bone]
-            )
+                sequence <= body.Sequences[pose.Bone])
             {
                 return;
             }
 
-            body.Sequences[pose.Bone] = sequence;
-            body.Positions[pose.Bone] = SandboxWorld.Vector(pose.Position);
-            body.Rotations[pose.Bone] = SandboxWorld.Quaternion(pose.Rotation).normalized;
+            if (body.Motion[pose.Bone].Add(stamp, sequence, pose.Position, pose.Rotation))
+            {
+                body.Sequences[pose.Bone] = sequence;
+            }
         }
 
         internal void Pose(SandboxMessage message)
         {
-            if 
-            (
-                !_bodies.TryGetValue(message.Id, out var body) ||
-                !SandboxPose.TryDecode(message.Data, out var offset, out var values)
-            )
+            if (!_bodies.TryGetValue(message.Id, out var body) ||
+                !SandboxPose.TryDecode(message.Data, out var offset, out var values))
             {
                 return;
             }
 
-            if (body.Bones == null && !Bind(body) || 
+            if (body.Bones == null && !Bind(body) ||
                 offset + values.Length / 7 > body.Bones.Length)
             {
                 return;
             }
 
+            double stamp = _world.Physics.Timestamp(message);
             for (int index = 0; index < values.Length / 7; index++)
             {
                 int bone = offset + index;
                 if (message.Sequence <= body.Sequences[bone]) continue;
 
-                body.Sequences[bone] = message.Sequence;
-                body.Positions[bone] = new Vector3(values[index * 7], values[index * 7 + 1], values[index * 7 + 2]);
-                body.Rotations[bone] = new Quaternion
-                (
-                    values[index * 7 + 3],
-                    values[index * 7 + 4],
-                    values[index * 7 + 5],
-                    values[index * 7 + 6]
-                );
+                Pose(new PhysicsPose(message.Id, (byte)bone,
+                    new Point3(values[index * 7], values[index * 7 + 1], values[index * 7 + 2]),
+                    new Rotation4(values[index * 7 + 3], values[index * 7 + 4], values[index * 7 + 5], values[index * 7 + 6])),
+                    message.Sequence, stamp);
             }
         }
 
         internal void LateUpdate()
         {
-            if (!_world.Active || _world.IsHost) return;
+            if (!_world.Active) return;
+
+            foreach (Body body in _bodies.Values)
+            {
+                body.Visual?.Update();
+            }
+
+            if (_world.IsHost) return;
 
             foreach (Body body in _bodies.Values)
             {
@@ -420,9 +824,11 @@ namespace NullServers.Sandbox
                 {
                     for (int index = 0; index < body.Bones.Length; index++)
                     {
-                        if (body.Bones[index] && body.Sequences[index] > 0)
+                        if (body.Bones[index] && body.Motion[index].Sample(_world.Physics.RenderTime, out var pose))
                         {
-                            body.Bones[index].SetPositionAndRotation(body.Positions[index], body.Rotations[index]);
+                            body.Bones[index].SetPositionAndRotation(
+                                new Vector3(pose.Position.X, pose.Position.Y, pose.Position.Z),
+                                new Quaternion(pose.Rotation.X, pose.Rotation.Y, pose.Rotation.Z, pose.Rotation.W));
                         }
                     }
                 }
@@ -434,6 +840,8 @@ namespace NullServers.Sandbox
             _world.Physics.Forget(id);
             if (!_bodies.Remove(id, out var body)) return;
 
+            body.Visual?.Dispose();
+
             if (!body.Root) return;
 
             _bound.Remove(body.Root.Pointer);
@@ -444,23 +852,10 @@ namespace NullServers.Sandbox
         {
             foreach (Body body in _bodies.Values)
             {
+                body.Visual?.Dispose();
                 if (!body.Root) continue;
 
-                if (body.Copy)
-                {
-                    Object.Destroy(body.Root);
-                }
-                else if (body.Original != null)
-                {
-                    for (int index = 0; index < body.Physics.Length; index++)
-                    {
-                        if (!body.Physics[index]) continue;
-
-                        body.Physics[index].isKinematic = body.Original[index].Kinematic;
-                        body.Physics[index].useGravity = body.Original[index].Gravity;
-                        body.Physics[index].detectCollisions = body.Original[index].Collisions;
-                    }
-                }
+                Object.Destroy(body.Root);
             }
 
             _bodies.Clear();

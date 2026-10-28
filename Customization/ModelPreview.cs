@@ -1,4 +1,4 @@
-using Il2Cpp;
+﻿using Il2Cpp;
 using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using UnityEngine;
@@ -13,17 +13,21 @@ namespace NullServers.Customization
         private readonly GameObject _lightObject;
         private readonly Transform _pivot;
         private readonly Camera _camera;
+        private readonly Light _light;
         private readonly AppearanceVisual _visual;
         private readonly Dictionary<IntPtr, Transform> _nodes = new();
         private readonly List<Renderer> _renderers = new();
+        private readonly List<Material> _hatMaterials = new();
         private ParticleSystem[] _particles = Array.Empty<ParticleSystem>();
         private readonly float _height;
         private Quaternion _rotation = Quaternion.Euler(0f, 180f, 0f);
-        private int _effectHat = -1;
+        private int[] _effectHats = Array.Empty<int>();
+        private readonly HashSet<IntPtr> _hatRoots = new();
 
         internal RenderTexture Texture { get; }
         internal bool AutoRotate { get; set; } = true;
         internal float Zoom { get; set; } = 1f;
+        internal float Lighting { get; set; } = 0.8f;
 
         internal ModelPreview(SyncCustomization source, LiveAppearance appearance)
         {
@@ -40,17 +44,29 @@ namespace NullServers.Customization
 
                 List<Renderer> renderers =
                 [
-                    source.KAMAAAJBLLG,
-                    source.EKMFOOLPMCC,
-                    source.NGBLPBOAANH,
-                    source.DCBPBGEFBHD,
-                    source.FFDDAKMAHKI,
-                    source.JCGAKKLDCKJ,
-                    source.IIGKOHECBEL
+                    source.Head,
+                    source.SkinHead,
+                    source.Body,
+                    source.LeftArm,
+                    source.RightArm,
+                    source.LeftLeg,
+                    source.RightLeg
                 ];
-                if (source.LEEICKEPPEB)
+                if (source.HatRoot)
                 {
-                    renderers.AddRange(source.LEEICKEPPEB.GetComponentsInChildren(Il2CppType.Of<Renderer>(), true).Select(component => component.Cast<Renderer>()));
+                    renderers.AddRange(source.HatRoot.GetComponentsInChildren(Il2CppType.Of<Renderer>(), true).Select(component => component.Cast<Renderer>()));
+                }
+
+                foreach (Transform hat in source.Hats)
+                {
+                    if (!hat) continue;
+
+                    if (hat.parent)
+                    {
+                        _hatRoots.Add(hat.parent.Pointer);
+                    }
+
+                    renderers.AddRange(hat.GetComponentsInChildren<Renderer>(true));
                 }
 
                 renderers = renderers.Where(renderer => renderer).DistinctBy(renderer => renderer.Pointer).ToList();
@@ -60,7 +76,7 @@ namespace NullServers.Customization
                 }
 
                 Transform sourceRoot = source.transform;
-                foreach (Transform node in renderers.Select(renderer => renderer.transform).Concat(new[] { source.ELPJDJFCCNJ, source.LEEICKEPPEB }).Where(node => node))
+                foreach (Transform node in renderers.Select(renderer => renderer.transform).Concat(new[] { source.AccentRoot, source.HatRoot }).Where(node => node))
                 {
                     while (sourceRoot && node != sourceRoot && !node.IsChildOf(sourceRoot))
                     {
@@ -73,13 +89,13 @@ namespace NullServers.Customization
                     throw new InvalidOperationException("The player model hierarchy is incomplete.");
                 }
 
-                CopyNodes(sourceRoot, _pivot, source.LEEICKEPPEB);
+                CopyNodes(sourceRoot, _pivot, source.HatRoot);
 
                 Transform model = _nodes[sourceRoot.Pointer];
                 model.localPosition = Vector3.zero;
                 model.localRotation = Quaternion.identity;
 
-                foreach (Transform branch in new[] { source.ELPJDJFCCNJ, source.LEEICKEPPEB })
+                foreach (Transform branch in new[] { source.AccentRoot, source.HatRoot })
                 {
                     if (!branch) continue;
 
@@ -90,21 +106,20 @@ namespace NullServers.Customization
                 }
 
                 Dictionary<IntPtr, Material[]> defaults = new();
-                bool customHead = source.EKMFOOLPMCC && source.EKMFOOLPMCC.gameObject.activeSelf;
+                bool customHead = source.SkinHead && source.SkinHead.gameObject.activeSelf;
 
                 foreach (Renderer original in renderers)
                 {
                     Transform node = _nodes[original.transform.Pointer];
 
-                    bool bodyPart = 
-                        original == source.KAMAAAJBLLG ||
-                        original == source.NGBLPBOAANH ||
-                        original == source.DCBPBGEFBHD ||
-                        original == source.FFDDAKMAHKI ||
-                        original == source.JCGAKKLDCKJ ||
-                        original == source.IIGKOHECBEL;
+                    bool bodyPart = original == source.Head ||
+                        original == source.Body ||
+                        original == source.LeftArm ||
+                        original == source.RightArm ||
+                        original == source.LeftLeg ||
+                        original == source.RightLeg;
 
-                    if (bodyPart || original == source.EKMFOOLPMCC && customHead)
+                    if (bodyPart || original == source.SkinHead && customHead)
                     {
                         for (Transform ancestor = node; ancestor && ancestor != _pivot; ancestor = ancestor.parent)
                         {
@@ -115,10 +130,8 @@ namespace NullServers.Customization
                     Renderer renderer;
                     SkinnedMeshRenderer skin = original.TryCast<SkinnedMeshRenderer>();
 
-                    bool hat = 
-                        source.LEEICKEPPEB &&
-                        (original.transform == source.LEEICKEPPEB ||
-                        original.transform.IsChildOf(source.LEEICKEPPEB));
+                    bool hat = source.Hats.ToArray().Any(node => node &&
+                        (original.transform == node || original.transform.IsChildOf(node)));
 
                     if (hat)
                     {
@@ -146,19 +159,24 @@ namespace NullServers.Customization
                     if (!renderer) continue;
 
                     renderer.sharedMaterials = original.sharedMaterials;
+                    if (hat)
+                    {
+                        Material[] materials = renderer.sharedMaterials.Select(material => material ? new Material(material) : null).ToArray();
+                        renderer.sharedMaterials = new Il2CppReferenceArray<Material>(materials);
+                        _hatMaterials.AddRange(materials.Where(material => material));
+                    }
+
                     defaults[renderer.Pointer] = appearance.OriginalMaterials(source, original);
                     renderer.shadowCastingMode = ShadowCastingMode.Off;
                     renderer.receiveShadows = false;
                     renderer.forceRenderingOff = false;
-                    renderer.enabled = 
-                        original.enabled ||
+                    renderer.enabled = original.enabled ||
                         bodyPart ||
-                        original == source.EKMFOOLPMCC &&
+                        original == source.SkinHead &&
                         customHead ||
-                        source.LEEICKEPPEB &&
-                        original.transform.IsChildOf(source.LEEICKEPPEB);
+                        hat;
 
-                    if (original == source.KAMAAAJBLLG)
+                    if (original == source.Head)
                     {
                         renderer.enabled = !customHead;
                     }
@@ -166,7 +184,6 @@ namespace NullServers.Customization
                     _renderers.Add(renderer);
                 }
 
-                // Reconstruct the bind pose without an Animator or any components from the live network player.
                 Dictionary<IntPtr, (Transform Bone, Matrix4x4 Matrix)> poses = new();
 
                 foreach (Renderer renderer in _renderers)
@@ -176,15 +193,12 @@ namespace NullServers.Customization
 
                     var bindposes = skin.sharedMesh.bindposes;
                     var bones = skin.bones;
+
                     for (int index = 0; index < Math.Min(bindposes.Length, bones.Length); index++)
                     {
                         if (!bones[index]) continue;
 
-                        poses.TryAdd
-                        (
-                            bones[index].Pointer,
-                            (bones[index], skin.localToWorldMatrix * bindposes[index].inverse)
-                        );
+                        poses.TryAdd(bones[index].Pointer, (bones[index], skin.localToWorldMatrix * bindposes[index].inverse));
                     }
                 }
 
@@ -197,8 +211,9 @@ namespace NullServers.Customization
                     }
                 }
 
-                PoseArm(source.DCBPBGEFBHD, model.TransformDirection(Vector3.left));
-                PoseArm(source.FFDDAKMAHKI, model.TransformDirection(Vector3.right));
+                RestoreHead(source);
+                PoseArm(source.LeftArm, model.TransformDirection(Vector3.left));
+                PoseArm(source.RightArm, model.TransformDirection(Vector3.right));
 
                 _visual = new AppearanceVisual(source, node => _nodes.GetValueOrDefault(node.Pointer), defaults);
                 _visual.RetainCurrent(LiveAppearance.Read(source), appearance.Textures);
@@ -225,7 +240,7 @@ namespace NullServers.Customization
                 _height = Mathf.Max(0.5f, bounds.size.y);
                 model.position -= bounds.center - _pivot.position;
 
-                UpdateEffects(LiveAppearance.Read(source).Hat);
+                UpdateEffects(LiveAppearance.Read(source).Hats);
 
                 Texture = new RenderTexture(768, 1024, 24)
                 {
@@ -253,10 +268,9 @@ namespace NullServers.Customization
                     hideFlags = HideFlags.HideAndDontSave
                 };
 
-                Light light = _lightObject.AddComponent(Il2CppType.Of<Light>()).Cast<Light>();
-                light.type = LightType.Directional;
-                light.intensity = 1.5f;
-                light.cullingMask = 1 << 30;
+                _light = _lightObject.AddComponent(Il2CppType.Of<Light>()).Cast<Light>();
+                _light.type = LightType.Directional;
+                _light.cullingMask = 1 << 30;
 
                 _lightObject.transform.rotation = Quaternion.Euler(35f, -25, 0f);
 
@@ -271,23 +285,19 @@ namespace NullServers.Customization
 
         private void CopyNodes(Transform source, Transform parent, Transform hats)
         {
-            if (source == hats)
+            if (source == hats || _hatRoots.Contains(source.Pointer))
             {
-                // Clone effect modules while inactive, before their destruction/gameplay scripts can run.
                 GameObject clone = UnityEngine.Object.Instantiate(source.gameObject, parent, false).Cast<GameObject>();
                 foreach (Component component in clone.GetComponentsInChildren(Il2CppType.Of<Component>(), true))
                 {
-                    if 
-                    (
-                        component &&
+                    if (component &&
                         !component.TryCast<Transform>() &&
                         !component.TryCast<Renderer>() &&
                         !component.TryCast<MeshFilter>() &&
                         !component.TryCast<ParticleSystem>() &&
                         !component.TryCast<Light>() &&
                         !component.TryCast<Animation>() &&
-                        !component.TryCast<Animator>()
-                    )
+                        !component.TryCast<Animator>())
                     {
                         UnityEngine.Object.DestroyImmediate(component);
                     }
@@ -295,7 +305,8 @@ namespace NullServers.Customization
 
                 MapHats(source, clone.transform);
 
-                _particles = clone.GetComponentsInChildren(Il2CppType.Of<ParticleSystem>(), true).Select(value => value.Cast<ParticleSystem>()).ToArray();
+                _particles = _particles.Concat(clone.GetComponentsInChildren(Il2CppType.Of<ParticleSystem>(), true)
+                    .Select(value => value.Cast<ParticleSystem>())).ToArray();
                 foreach (ParticleSystem particles in _particles)
                 {
                     ParticleSystem.MainModule main = particles.main;
@@ -369,14 +380,37 @@ namespace NullServers.Customization
             elbow.rotation = Quaternion.FromToRotation(hand.position - elbow.position, direction) * elbow.rotation;
         }
 
+        private void RestoreHead(SyncCustomization source)
+        {
+            SyncCustomization baseline = Resources.FindObjectsOfTypeAll<SyncCustomization>()
+                .FirstOrDefault(value => value && !value.gameObject.scene.IsValid() &&
+                value.Body && value.Body.sharedMesh == source.Body.sharedMesh);
+            if (!baseline) return;
+
+            Transform[] originals = baseline.transform.root.GetComponentsInChildren<Transform>(true).ToArray();
+            foreach (Transform node in source.transform.root.GetComponentsInChildren<Transform>(true))
+            {
+                if (!_nodes.TryGetValue(node.Pointer, out var copy) ||
+                    !(node.name.EndsWith(" Head", StringComparison.Ordinal) ||
+                    node.name.EndsWith(" Neck", StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                Transform rest = originals.FirstOrDefault(value => value.name == node.name);
+                if (!rest) continue;
+
+                copy.localPosition = rest.localPosition;
+                copy.localRotation = rest.localRotation;
+            }
+        }
+
         internal void Rotate(Vector2 delta)
         {
             AutoRotate = false;
-            _rotation = Quaternion.AngleAxis
-            (
+            _rotation = Quaternion.AngleAxis(
                 -delta.y * 0.6f, Vector3.right) *
-                Quaternion.AngleAxis(delta.x * 0.6f, Vector3.up
-            ) * _rotation;
+                Quaternion.AngleAxis(delta.x * 0.6f, Vector3.up) * _rotation;
         }
 
         internal void Update(Appearance appearance, SkinTextures textures)
@@ -388,13 +422,13 @@ namespace NullServers.Customization
                 _rotation = Quaternion.AngleAxis(Time.unscaledDeltaTime * 22f, Vector3.up) * _rotation;
             }
 
-            UpdateEffects(appearance.Hat);
+            UpdateEffects(appearance.Hats);
             Render();
         }
 
-        private void UpdateEffects(int hat)
+        private void UpdateEffects(int[] hats)
         {
-            if (_effectHat == hat) return;
+            if (_effectHats.SequenceEqual(hats)) return;
 
             foreach (ParticleSystem particles in _particles)
             {
@@ -404,7 +438,7 @@ namespace NullServers.Customization
                 particles.Play(false);
             }
 
-            _effectHat = hat;
+            _effectHats = hats;
         }
 
         private void Render()
@@ -412,19 +446,64 @@ namespace NullServers.Customization
             _pivot.rotation = _rotation;
 
             Vector3 center = _pivot.position;
-            _camera.transform.position = center + new Vector3
-            (
+            _camera.transform.position = center + new Vector3(
                 0f,
                 _height * 0.04f,
-                -_height * 2.6f / Mathf.Clamp(Zoom, 0.7f, 2.5f)
-            );
+                -_height * 2.6f / Mathf.Clamp(Zoom, 0.7f, 2.5f));
             _camera.transform.LookAt(center);
-            _camera.Render();
+            _light.intensity = Mathf.Clamp(Lighting, 0.15f, 2f);
+
+            foreach (Renderer renderer in _renderers)
+            {
+                if (!renderer) continue;
+
+                foreach (Material material in renderer.sharedMaterials)
+                {
+                    if (!material) continue;
+
+                    if (material.HasProperty("_Glossiness"))
+                    {
+                        material.SetFloat("_Glossiness", 0.12f);
+                    }
+
+                    if (material.HasProperty("_Metallic"))
+                    {
+                        material.SetFloat("_Metallic", 0f);
+                    }
+                }
+            }
+
+            AmbientMode ambientMode = RenderSettings.ambientMode;
+            Color ambient = RenderSettings.ambientLight;
+            float reflection = RenderSettings.reflectionIntensity;
+
+            try
+            {
+                RenderSettings.ambientMode = AmbientMode.Flat;
+                RenderSettings.ambientLight = Color.white * (Lighting * 0.45f);
+                RenderSettings.reflectionIntensity = 0f;
+                _camera.Render();
+            }
+            finally
+            {
+                RenderSettings.ambientMode = ambientMode;
+                RenderSettings.ambientLight = ambient;
+                RenderSettings.reflectionIntensity = reflection;
+            }
         }
 
         public void Dispose()
         {
             _visual?.Dispose();
+            foreach (Material material in _hatMaterials)
+            {
+                if (material)
+                {
+                    UnityEngine.Object.Destroy(material);
+                }
+            }
+
+            _hatMaterials.Clear();
             if (_cameraObject)
             {
                 UnityEngine.Object.Destroy(_cameraObject);

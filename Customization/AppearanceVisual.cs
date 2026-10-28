@@ -1,4 +1,4 @@
-using Il2Cpp;
+﻿using Il2Cpp;
 using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using UnityEngine;
@@ -21,31 +21,31 @@ namespace NullServers.Customization
         private Appearance _applied;
         private Texture2D[] _images;
 
-        internal AppearanceVisual
-        (
+        internal int HatCount => _hats.Length;
+
+        internal AppearanceVisual(
             SyncCustomization source,
             Func<Transform, Transform> map = null,
-            IReadOnlyDictionary<IntPtr, Material[]> defaults = null
-        )
+            IReadOnlyDictionary<IntPtr, Material[]> defaults = null)
         {
             _preview = map != null;
 
             Transform Node(Transform value) => value && map != null ? map(value) : value;
             Renderer SurfaceFor(Renderer value) => value && map != null ? Node(value.transform)?.GetComponent(Il2CppType.Of<Renderer>())?.Cast<Renderer>() : value;
 
-            _head = SurfaceFor(source.KAMAAAJBLLG);
+            _head = SurfaceFor(source.Head);
             _headForceOff = _head && _head.forceRenderingOff;
             _headEnabled = _preview || _head && _head.enabled;
-            _skinHead = SurfaceFor(source.EKMFOOLPMCC);
+            _skinHead = SurfaceFor(source.SkinHead);
             _parts =
             [
                 [_skinHead],
-                [SurfaceFor(source.NGBLPBOAANH)],
-                [SurfaceFor(source.DCBPBGEFBHD), SurfaceFor(source.FFDDAKMAHKI)],
-                [SurfaceFor(source.JCGAKKLDCKJ), SurfaceFor(source.IIGKOHECBEL)]
+                [SurfaceFor(source.Body)],
+                [SurfaceFor(source.LeftArm), SurfaceFor(source.RightArm)],
+                [SurfaceFor(source.LeftLeg), SurfaceFor(source.RightLeg)]
             ];
 
-            _hats = Enumerable.Range(0, source.GKCNMADGAAF.Count).Select(index => Node(source.GKCNMADGAAF[index])).ToArray();
+            _hats = Enumerable.Range(0, source.Hats.Count).Select(index => Node(source.Hats[index])).ToArray();
 
             foreach (Renderer renderer in _parts.Skip(1).SelectMany(part => part).Where(renderer => renderer))
             {
@@ -68,7 +68,6 @@ namespace NullServers.Customization
 
                 renderer.sharedMaterials = new Il2CppReferenceArray<Material>(materials);
 
-                // Unity can instantiate shared materials on the next materials getter, so retain the renderer-owned instances.
                 Material[] owned = renderer.materials.ToArray();
                 foreach (Material material in materials)
                 {
@@ -84,8 +83,7 @@ namespace NullServers.Customization
 
         internal void Apply(Appearance appearance, SkinTextures textures)
         {
-            string[] urls = appearance.Urls;
-            Texture2D[] images = urls.Select(url => appearance.UseSkin ? textures.Get(url) : null).ToArray();
+            Texture2D[] images = textures.Get(appearance);
 
             if (_applied?.SameLook(appearance) == true && _images != null && images.SequenceEqual(_images))
             {
@@ -96,13 +94,7 @@ namespace NullServers.Customization
             _images = images;
             ColorUtility.TryParseHtmlString(appearance.FurColor, out Color fur);
 
-            for (int index = 0; index < _hats.Length; index++)
-            {
-                if (_hats[index])
-                {
-                    _hats[index].gameObject.SetActive(index == appearance.Hat);
-                }
-            }
+            ApplyHats(appearance.Hats);
 
             foreach (Surface surface in _surfaces)
             {
@@ -172,15 +164,19 @@ namespace NullServers.Customization
 
         internal void RetainCurrent(Appearance appearance, SkinTextures textures)
         {
+            ApplyHats(appearance.Hats);
+            _applied = appearance;
+            _images = textures.Get(appearance);
+        }
+
+        private void ApplyHats(int[] hats)
+        {
             for (int index = 0; index < _hats.Length; index++)
             {
                 if (!_hats[index]) continue;
 
-                _hats[index].gameObject.SetActive(index == appearance.Hat);
+                _hats[index].gameObject.SetActive(hats.Contains(index));
             }
-
-            _applied = appearance;
-            _images = appearance.Urls.Select(url => appearance.UseSkin ? textures.Get(url) : null).ToArray();
         }
 
         internal Material[] OriginalMaterials(Renderer renderer)

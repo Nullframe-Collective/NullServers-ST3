@@ -3,3 +3,6 @@ obj/
 .vs/
 *.user
 *.suo
+research/
+tests/
+dist/

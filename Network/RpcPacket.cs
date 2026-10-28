@@ -22,15 +22,12 @@ namespace NullServers.Network
         {
             header = default;
             Cursor cursor = new(data);
-            if 
-            (
-                !cursor.Int(out var objectId) ||
+            if (!cursor.Int(out var objectId) ||
                 objectId < 0 ||
                 objectId >= 65535 ||
                 !cursor.Byte(out var spawned) ||
                 spawned != 1 ||
-                !cursor.Byte(out var component)
-            )
+                !cursor.Byte(out var component))
             {
                 return false;
             }
@@ -138,7 +135,6 @@ namespace NullServers.Network
                 if (count < 0 || count > Remaining) return false;
 
                 Position += count;
-
                 return true;
             }
 

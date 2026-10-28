@@ -1,9 +1,7 @@
-using Il2Cpp;
+﻿using Il2Cpp;
 using Il2CppInterop.Runtime;
-using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using NullServers.Network;
 using UnityEngine;
-using UnityEngine.Events;
 using UnityEngine.UI;
 
 namespace NullServers.UI
@@ -30,13 +28,16 @@ namespace NullServers.UI
 
         internal RoomMultiplayerMenu Menu { get; private set; }
 
-        internal bool Available => 
+        internal Button Settings => _settings;
+        internal Transform Root => _settings ? _settings.transform.parent.parent : null;
+
+        internal bool Available =>
             _session.IsNullFrame &&
             !_session.IsSwitching &&
             _session.Relay &&
             _session.Relay.CurrentRoom != null &&
             Menu &&
-            Menu.CJNLEDLNGID;
+            Menu.IsInitialized;
 
         internal PauseMenu(RelaySession session)
         {
@@ -47,15 +48,12 @@ namespace NullServers.UI
 
         internal void Update()
         {
-            RoomMultiplayerMenu current = RoomMultiplayerMenu.GJDGDIGECJN;
-            if 
-            (
-                current != Menu ||
+            RoomMultiplayerMenu current = RoomMultiplayerMenu.Current;
+            if (current != Menu ||
                 !_session.IsNullFrame ||
                 _session.IsSwitching ||
                 !_session.Relay ||
-                _session.Relay.CurrentRoom == null
-            )
+                _session.Relay.CurrentRoom == null)
             {
                 Restore(_owner);
 
@@ -82,14 +80,11 @@ namespace NullServers.UI
                 Menu = current;
             }
 
-            if 
-            (
-                !_session.IsNullFrame ||
+            if (!_session.IsNullFrame ||
                 _session.IsSwitching ||
                 !current ||
                 !_session.Relay ||
-                _session.Relay.CurrentRoom == null
-            )
+                _session.Relay.CurrentRoom == null)
             {
                 return;
             }
@@ -107,6 +102,11 @@ namespace NullServers.UI
                     FindText(button)?.text?.Trim().Equals("Settings", StringComparison.OrdinalIgnoreCase) == true);
 
                 if (!_settings) return;
+
+                while (_settings.transform.parent?.GetComponent(Il2CppType.Of<Button>())?.Cast<Button>() is { } parentButton)
+                {
+                    _settings = parentButton;
+                }
 
                 Transform parent = _settings.transform.parent;
 
@@ -153,7 +153,10 @@ namespace NullServers.UI
                 changed = true;
             }
 
-            if (changed) Layout();
+            if (changed)
+            {
+                Layout();
+            }
         }
 
         private void Layout()
@@ -184,22 +187,9 @@ namespace NullServers.UI
 
         private static Button CreateButton(Button template, Entry entry)
         {
-            GameObject clone = new
-            (
-                "NullFrame" + entry.Label.Replace(" ", ""),
-                new Il2CppReferenceArray<Il2CppSystem.Type>
-                (
-                    [
-                        Il2CppType.Of<RectTransform>(), 
-                        Il2CppType.Of<Button>()
-                    ]
-                )
-            );
-
+            Button button = GameUi.Create<Button>("NullFrame" + entry.Label.Replace(" ", ""), template.transform.parent);
             RectTransform sourceRect = template.transform.Cast<RectTransform>();
-
-            RectTransform rect = clone.transform.Cast<RectTransform>();
-            rect.SetParent(template.transform.parent, false);
+            RectTransform rect = button.transform.Cast<RectTransform>();
             rect.anchorMin = sourceRect.anchorMin;
             rect.anchorMax = sourceRect.anchorMax;
             rect.pivot = sourceRect.pivot;
@@ -207,44 +197,27 @@ namespace NullServers.UI
             rect.anchoredPosition = sourceRect.anchoredPosition;
             rect.SetSiblingIndex(template.transform.GetSiblingIndex() + 1);
 
-            Button button = clone.GetComponent(Il2CppType.Of<Button>()).Cast<Button>();
-            button.onClick = new Button.ButtonClickedEvent();
-            button.onClick.AddListener(DelegateSupport.ConvertDelegate<UnityAction>(entry.Open));
+            GameUi.OnClick(button, entry.Open);
             button.transition = template.transition;
             button.colors = template.colors;
 
             Text sourceText = FindText(template);
 
-            GameObject label = new
-            (
-                "Label",
-                new Il2CppReferenceArray<Il2CppSystem.Type>
-                (
-                    [
-                        Il2CppType.Of<RectTransform>(),
-                        Il2CppType.Of<CanvasRenderer>(),
-                        Il2CppType.Of<Text>()
-                    ]
-                )
-            );
-            RectTransform labelRect = label.transform.Cast<RectTransform>();
-            labelRect.SetParent(rect, false);
+            Text text = GameUi.Create<Text>("Label", rect);
+            RectTransform labelRect = text.rectTransform;
             labelRect.anchorMin = Vector2.zero;
             labelRect.anchorMax = Vector2.one;
             labelRect.offsetMin = labelRect.offsetMax = Vector2.zero;
 
-            Text text = label.GetComponent(Il2CppType.Of<Text>()).Cast<Text>();
             text.font = sourceText.font;
             text.fontSize = sourceText.fontSize;
             text.fontStyle = sourceText.fontStyle;
             text.color = sourceText.color;
             text.alignment = sourceText.alignment;
-            text.resizeTextMinSize = sourceText.resizeTextMinSize;
-            text.resizeTextMaxSize = sourceText.resizeTextMaxSize;
-            text.resizeTextForBestFit = true;
+            GameUi.Fit(text, sourceText.resizeTextMinSize, sourceText.resizeTextMaxSize);
             text.text = entry.Label;
             button.targetGraphic = text;
-            clone.SetActive(entry.Visible());
+            button.gameObject.SetActive(entry.Visible());
 
             return button;
         }
@@ -253,7 +226,7 @@ namespace NullServers.UI
 
         internal bool Hide(object owner)
         {
-            if (_owner != null || !_group || !Available || !Menu.IOMIAHNBDOG)
+            if (_owner != null || !_group || !Available || !Menu.IsPaused)
             {
                 return false;
             }

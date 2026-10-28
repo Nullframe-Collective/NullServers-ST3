@@ -1,4 +1,4 @@
-using Il2Cpp;
+﻿using Il2Cpp;
 using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using NullServers.Customization;
@@ -18,13 +18,23 @@ namespace NullServers.Sandbox
         private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
         private readonly Dictionary<string, Texture2D> _icons = new();
         private readonly Queue<Entry> _pendingIcons = new();
+        private readonly HashSet<string> _queuedIcons = new();
+        private readonly Dictionary<string, float> _retryIcons = new();
         private readonly HashSet<IntPtr> _capturedVolumes = new();
         private float _nextCapture;
+        private int _scene = -1;
         private readonly BuildingProps _props = new();
 
         internal SkinTextures Textures { get; } = new();
 
-        internal IReadOnlyCollection<Entry> Entries => _entries.Values;
+        internal IReadOnlyCollection<Entry> Entries
+        {
+            get
+            {
+                ScanIfStale();
+                return _entries.Values;
+            }
+        }
 
         internal SandboxAssets()
         {
@@ -47,22 +57,21 @@ namespace NullServers.Sandbox
             }
         }
 
-        private void Add(Entry entry)
-        {
-            if (_entries.TryAdd(entry.Id, entry))
-            {
-                _pendingIcons.Enqueue(entry);
-            }
-        }
+        private void Add(Entry entry) => _entries.TryAdd(entry.Id, entry);
 
-        internal void Capture()
+        internal void Capture(IEnumerable<Volume> volumes)
         {
-            foreach
-            (
-                Entry entry in _entries.Values.Where(entry => !entry.Primitive.HasValue &&
+            int scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene().handle;
+            if (_scene != scene)
+            {
+                _scene = scene;
+                _capturedVolumes.Clear();
+                _nextCapture = 0f;
+            }
+
+            foreach (Entry entry in _entries.Values.Where(entry => !entry.Primitive.HasValue &&
                 !entry.Source &&
-                !entry.Id.StartsWith("kit:", StringComparison.Ordinal)).ToArray()
-            )
+                !entry.Id.StartsWith("kit:", StringComparison.Ordinal)).ToArray())
             {
                 _entries.Remove(entry.Id);
                 if (_icons.Remove(entry.Id, out var icon) && icon)
@@ -71,14 +80,14 @@ namespace NullServers.Sandbox
                 }
             }
 
-            foreach (Volume volume in Object.FindObjectsOfType<Volume>())
+            foreach (Volume volume in volumes)
             {
-                if (!_capturedVolumes.Add(volume.Pointer) || volume.PDKPIOHFCCK == null)
+                if (!volume || !_capturedVolumes.Add(volume.Pointer) || volume.Categories == null)
                 {
                     continue;
                 }
 
-                foreach (Volume.catagory category in volume.PDKPIOHFCCK)
+                foreach (Volume.catagory category in volume.Categories)
                 {
                     if (category == null || category.isWeapon || category.isPlayAs || category.isMusic || category.options == null)
                     {
@@ -98,7 +107,10 @@ namespace NullServers.Sandbox
                     }
                 }
             }
+        }
 
+        private void ScanIfStale()
+        {
             if (Time.unscaledTime < _nextCapture) return;
 
             _nextCapture = Time.unscaledTime + 15f;
@@ -110,19 +122,16 @@ namespace NullServers.Sandbox
                 }
             }
 
-            RoomMultiplayerMenu room = RoomMultiplayerMenu.GJDGDIGECJN;
+            RoomMultiplayerMenu room = RoomMultiplayerMenu.Current;
             if (!room) return;
 
             foreach (MeshFilter filter in Object.FindObjectsOfType<MeshFilter>())
             {
-                if 
-                (
-                    !filter.sharedMesh ||
+                if (!filter.sharedMesh ||
                     filter.gameObject.scene != room.gameObject.scene ||
                     filter.sharedMesh.vertexCount > 100000 ||
                     _entries.Count >= 512 ||
-                    filter.GetComponentsInChildren<MeshFilter>().Length != 1
-                )
+                    filter.GetComponentsInChildren<MeshFilter>().Length != 1)
                 {
                     continue;
                 }
@@ -130,18 +139,14 @@ namespace NullServers.Sandbox
                 bool excluded = false;
                 for (Transform node = filter.transform; node; node = node.parent)
                 {
-                    if 
-                    (
-                        node.GetComponent(Il2CppType.Of<PlayerNetworkController>()) ||
+                    if (node.GetComponent(Il2CppType.Of<PlayerNetworkController>()) ||
                         node.GetComponent(Il2CppType.Of<PlayerMonster>()) ||
                         node.GetComponent(Il2CppType.Of<Bot>()) ||
                         node.GetComponent(Il2CppType.Of<Volume>()) ||
                         node.GetComponent(Il2CppType.Of<RagdollController>()) ||
-                        node.GetComponent(Il2CppType.Of<FPScontroller>())
-                    )
+                        node.GetComponent(Il2CppType.Of<FPScontroller>()))
                     {
                         excluded = true;
-
                         break;
                     }
                 }
@@ -155,11 +160,9 @@ namespace NullServers.Sandbox
                 Bounds bounds = filter.sharedMesh.bounds;
                 Renderer renderer = filter.GetComponent(Il2CppType.Of<Renderer>())?.Cast<Renderer>();
 
-                string signature = 
-                    filter.sharedMesh.name + "|" + 
+                string signature = filter.sharedMesh.name + "|" +
                     filter.sharedMesh.vertexCount + "|" +
-                    string.Join
-                    (
+                    string.Join(
                         "|",
                         new[]
                         {
@@ -170,11 +173,10 @@ namespace NullServers.Sandbox
                             bounds.size.y,
                             bounds.size.z
                         }
-                        .Select(value => value.ToString("R", CultureInfo.InvariantCulture))) + 
+                        .Select(value => value.ToString("R", CultureInfo.InvariantCulture))) +
                         "|" +
-                        (renderer ? 
-                        string.Join("|", renderer.sharedMaterials.Select(material => material ? material.name : "")
-                    ) : "");
+                        (renderer ?
+                        string.Join("|", renderer.sharedMaterials.Select(material => material ? material.name : "")) : "");
 
                 string id = string.Concat("scene:", room.gameObject.scene.name, ":", Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(signature))).AsSpan(0, 24));
 
@@ -187,12 +189,9 @@ namespace NullServers.Sandbox
 
         private static bool SafeProp(GameObject source)
         {
-            if 
-            (
-                !source ||
+            if (!source ||
                 source.name.StartsWith("NullFrame", StringComparison.Ordinal) ||
-                source.GetComponentsInChildren<Transform>(true).Length > 128
-            )
+                source.GetComponentsInChildren<Transform>(true).Length > 128)
             {
                 return false;
             }
@@ -213,12 +212,18 @@ namespace NullServers.Sandbox
             }
 
             var meshes = source.GetComponentsInChildren<MeshFilter>(true);
-            return 
-                meshes.Length is > 0 and <= 32 &&
+            return meshes.Length is > 0 and <= 32 &&
                 meshes.All(mesh => !mesh.sharedMesh || mesh.sharedMesh.vertexCount < 100000);
         }
 
-        internal Entry Find(string id) => id == null ? null : _entries.GetValueOrDefault(id);
+        internal Entry Find(string id)
+        {
+            if (id == null) return null;
+            if (_entries.TryGetValue(id, out var entry)) return entry;
+
+            ScanIfStale();
+            return _entries.GetValueOrDefault(id);
+        }
 
         internal GameObject Create(string id, bool collision)
         {
@@ -235,6 +240,7 @@ namespace NullServers.Sandbox
             {
                 root = GameObject.CreatePrimitive(entry.Primitive.Value);
                 root.name = "NullFrameBuild";
+
                 foreach (Collider collider in root.GetComponents<Collider>())
                 {
                     collider.enabled = collision;
@@ -263,13 +269,11 @@ namespace NullServers.Sandbox
                 if (id.StartsWith("scene:", StringComparison.Ordinal))
                 {
                     Mesh mesh = entry.Source.GetComponent(Il2CppType.Of<MeshFilter>()).Cast<MeshFilter>().sharedMesh;
-                    root.transform.localScale = Vector3.one / Mathf.Max
-                    (
+                    root.transform.localScale = Vector3.one / Mathf.Max(
                         0.01f,
                         mesh.bounds.size.x,
                         mesh.bounds.size.y,
-                        mesh.bounds.size.z
-                    );
+                        mesh.bounds.size.z);
                 }
 
                 if (collision)
@@ -292,7 +296,20 @@ namespace NullServers.Sandbox
                 return entry.Icon.texture;
             }
 
-            return _icons.GetValueOrDefault(entry.Id);
+            Texture2D texture = _icons.GetValueOrDefault(entry.Id);
+            if (!texture)
+            {
+                QueueIcon(entry);
+            }
+
+            return texture;
+        }
+
+        private void QueueIcon(Entry entry)
+        {
+            if (Time.unscaledTime < _retryIcons.GetValueOrDefault(entry.Id) || !_queuedIcons.Add(entry.Id)) return;
+
+            _pendingIcons.Enqueue(entry);
         }
 
         internal void Update()
@@ -300,7 +317,15 @@ namespace NullServers.Sandbox
             Textures.Update();
             if (_pendingIcons.TryDequeue(out var entry))
             {
-                RenderIcon(entry);
+                _queuedIcons.Remove(entry.Id);
+                try
+                {
+                    RenderIcon(entry);
+                }
+                catch (Exception exception) when (exception is InvalidOperationException or Il2CppInterop.Runtime.Il2CppException)
+                {
+                    _retryIcons[entry.Id] = Time.unscaledTime + 2f;
+                }
             }
         }
 
@@ -345,8 +370,15 @@ namespace NullServers.Sandbox
                 camera.Render();
                 RenderTexture.active = texture;
                 Texture2D icon = new(128, 128, TextureFormat.RGBA32, false);
+                icon.hideFlags = HideFlags.HideAndDontSave;
                 icon.ReadPixels(new Rect(0f, 0f, 128f, 128f), 0, 0);
                 icon.Apply();
+
+                if (_icons.Remove(entry.Id, out var old) && old)
+                {
+                    Object.Destroy(old);
+                }
+
                 _icons[entry.Id] = icon;
                 camera.targetTexture = null;
             }
@@ -359,6 +391,22 @@ namespace NullServers.Sandbox
                 Object.Destroy(cameraObject);
                 Object.Destroy(lightObject);
             }
+        }
+
+        internal static Transform CreateSegment(Transform parent, Material material)
+        {
+            GameObject segment = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            Collider collider = segment.GetComponent<Collider>();
+            collider.enabled = false;
+            Object.Destroy(collider);
+            segment.transform.SetParent(parent, false);
+
+            Renderer renderer = segment.GetComponent<Renderer>();
+            renderer.sharedMaterial = material;
+            renderer.shadowCastingMode = ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+
+            return segment.transform;
         }
 
         internal static Bounds BoundsOf(GameObject root)
@@ -379,58 +427,50 @@ namespace NullServers.Sandbox
 
         internal static GameObject CloneVisual(GameObject source, string name)
         {
-            Dictionary<IntPtr, Transform> nodes = new();
-            GameObject root = new(name);
-            void Copy(Transform original, Transform parent)
-            {
-                Transform node = original == source.transform ? root.transform : new GameObject(original.name).transform;
-                if (original != source.transform)
-                {
-                    node.SetParent(parent, false);
-                }
+            GameObject holder = new("PropStaging");
+            holder.SetActive(false);
+            GameObject root = null;
 
-                node.localPosition = original == source.transform ? Vector3.zero : original.localPosition;
-                node.localRotation = original == source.transform ? Quaternion.identity : original.localRotation;
-                node.localScale = original.localScale;
-                node.gameObject.SetActive(original == source.transform || original.gameObject.activeSelf);
-                nodes[original.Pointer] = node;
-                for (int index = 0; index < original.childCount; index++)
-                {
-                    Copy(original.GetChild(index), node);
-                }
-            }
-
-            Copy(source.transform, null);
-            foreach (Renderer original in source.GetComponentsInChildren<Renderer>(true))
+            try
             {
-                Transform node = nodes[original.transform.Pointer];
-                Renderer renderer;
-                SkinnedMeshRenderer skin = original.TryCast<SkinnedMeshRenderer>();
-                if (skin)
+                root = Object.Instantiate(source, holder.transform, false).Cast<GameObject>();
+                root.SetActive(false);
+                root.name = name;
+
+                foreach (Component component in root.GetComponentsInChildren<Component>(true))
                 {
-                    SkinnedMeshRenderer copy = node.gameObject.AddComponent(Il2CppType.Of<SkinnedMeshRenderer>()).Cast<SkinnedMeshRenderer>();
-                    copy.sharedMesh = skin.sharedMesh;
-                    copy.bones = new Il2CppReferenceArray<Transform>(skin.bones.Select(bone => bone ? nodes.GetValueOrDefault(bone.Pointer) : null).ToArray());
-                    copy.rootBone = skin.rootBone ? nodes.GetValueOrDefault(skin.rootBone.Pointer) : null;
-                    copy.localBounds = skin.localBounds;
-                    copy.updateWhenOffscreen = true;
-                    renderer = copy;
-                }
-                else
-                {
-                    MeshFilter mesh = original.GetComponent(Il2CppType.Of<MeshFilter>())?.Cast<MeshFilter>();
-                    if (!mesh || !mesh.sharedMesh)
+                    if (!component ||
+                        component.TryCast<Transform>() ||
+                        component.TryCast<Renderer>() ||
+                        component.TryCast<MeshFilter>() ||
+                        component.TryCast<ParticleSystem>() ||
+                        component.TryCast<Light>() ||
+                        component.TryCast<Animation>() ||
+                        component.TryCast<Animator>())
                     {
                         continue;
                     }
 
-                    node.gameObject.AddComponent(Il2CppType.Of<MeshFilter>()).Cast<MeshFilter>().sharedMesh = mesh.sharedMesh;
-                    renderer = node.gameObject.AddComponent(Il2CppType.Of<MeshRenderer>()).Cast<MeshRenderer>();
+                    Object.DestroyImmediate(component);
                 }
 
-                renderer.sharedMaterials = original.sharedMaterials;
-                renderer.enabled = original.enabled;
-                renderer.shadowCastingMode = ShadowCastingMode.On;
+                root.transform.SetParent(null, false);
+                root.transform.localPosition = Vector3.zero;
+                root.transform.localRotation = Quaternion.identity;
+                root.SetActive(true);
+            }
+            catch
+            {
+                if (root)
+                {
+                    Object.Destroy(root);
+                }
+
+                throw;
+            }
+            finally
+            {
+                Object.Destroy(holder);
             }
 
             return root;

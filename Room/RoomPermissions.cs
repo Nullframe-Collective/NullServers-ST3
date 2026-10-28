@@ -20,8 +20,7 @@ namespace NullServers.Room
 
         internal bool Allows(int clientId, string account)
         {
-            return 
-                account != null &&
+            return account != null &&
                 _accounts.TryGetValue(clientId, out var expected) &&
                 string.Equals(account, expected, StringComparison.Ordinal);
         }

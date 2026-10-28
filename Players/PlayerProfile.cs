@@ -1,3 +1,4 @@
+using NullServers.Network;
 using NullServers.Room;
 using System.Globalization;
 using System.Text;
@@ -9,19 +10,36 @@ namespace NullServers.Players
     {
         public string Nickname { get; }
         public string ColorHex { get; }
+        public NameColorMode ColorMode { get; }
+        public string GradientColor { get; }
+        public float ColorSpeed { get; }
 
-        public PlayerProfile(string nickname, string colorHex)
+        public PlayerProfile(
+            string nickname,
+            string colorHex,
+            NameColorMode colorMode = NameColorMode.Static,
+            string gradientColor = "#55AAFF",
+            float colorSpeed = 1f)
         {
             Nickname = nickname;
             ColorHex = colorHex;
+            ColorMode = colorMode;
+            GradientColor = gradientColor;
+            ColorSpeed = colorSpeed;
         }
 
         internal const int NameLimit = 24;
         internal static readonly PlayerProfile Default = new("", "#FFFFFF");
 
-        internal string RichName => $"<color={ColorHex}>{Nickname}</color>";
+        internal string RichName => NameColors.RichName(this, NameColors.Now);
+        internal string CurrentColor => NameColors.Color(this, NameColors.Now);
 
-        internal static PlayerProfile Normalize(string nickname, string colorHex)
+        internal static PlayerProfile Normalize(
+            string nickname,
+            string colorHex,
+            NameColorMode colorMode = NameColorMode.Static,
+            string gradientColor = "#55AAFF",
+            float colorSpeed = 1f)
         {
             StringBuilder text = new();
             int count = 0;
@@ -45,20 +63,23 @@ namespace NullServers.Players
                 });
             }
 
-            return new PlayerProfile
-            (
+            return new PlayerProfile(
                 text.ToString().Trim(),
-                RoomOptions.IsValidColor(colorHex) ? colorHex.ToUpperInvariant() : "#FFFFFF"
-            );
+                RoomOptions.IsValidColor(colorHex) ? colorHex.ToUpperInvariant() : "#FFFFFF",
+                Enum.IsDefined(typeof(NameColorMode), colorMode) ? colorMode : NameColorMode.Static,
+                RoomOptions.IsValidColor(gradientColor) ? gradientColor.ToUpperInvariant() : "#55AAFF",
+                float.IsFinite(colorSpeed) ? Math.Clamp(colorSpeed, 0.1f, 5f) : 1f);
         }
 
-        internal bool Matches(PlayerProfile other) => other != null && Nickname == other.Nickname && ColorHex == other.ColorHex;
+        internal bool Matches(PlayerProfile other) =>
+            other != null && Nickname == other.Nickname && ColorHex == other.ColorHex &&
+            ColorMode == other.ColorMode && GradientColor == other.GradientColor && ColorSpeed == other.ColorSpeed;
 
-        internal bool IsValid => 
+        internal bool IsValid =>
             Nickname != null &&
             Nickname.Length > 0 &&
             RoomOptions.IsValidColor(ColorHex) &&
-            Matches(Normalize(Nickname, ColorHex));
+            Matches(Normalize(Nickname, ColorHex, ColorMode, GradientColor, ColorSpeed));
     }
 
     internal enum ProfilePacketKind
@@ -93,51 +114,32 @@ namespace NullServers.Players
         internal static bool TryParse(string json, out ProfilePacket packet)
         {
             packet = null;
-
-            if (string.IsNullOrEmpty(json) || Encoding.UTF8.GetByteCount(json) > MaxBytes)
+            ProfilePacket value = JsonPacket.Read<ProfilePacket>(json, MaxBytes);
+            if (value == null ||
+                value.Version != 1 ||
+                value.Players == null ||
+                value.Players.Length > RoomOptions.PlayerLimit ||
+                !Enum.IsDefined(typeof(ProfilePacketKind), value.Kind) ||
+                (value.Kind != ProfilePacketKind.Snapshot && value.Players.Length != 1))
             {
                 return false;
             }
 
-            try
+            HashSet<int> ids = new();
+            foreach (ProfileEntry entry in value.Players)
             {
-                ProfilePacket value = JsonSerializer.Deserialize<ProfilePacket>(json);
-                if 
-                (
-                    value == null ||
-                    value.Version != 1 ||
-                    value.Players == null ||
-                    value.Players.Length > RoomOptions.PlayerLimit ||
-                    !Enum.IsDefined(typeof(ProfilePacketKind), value.Kind) ||
-                    (value.Kind != ProfilePacketKind.Snapshot && value.Players.Length != 1)
-                )
+                if (entry == null ||
+                    entry.ClientId < 0 ||
+                    !ids.Add(entry.ClientId) ||
+                    (value.Kind != ProfilePacketKind.Remove && (entry.Profile == null || !entry.Profile.IsValid)))
                 {
                     return false;
                 }
-
-                HashSet<int> ids = new();
-                foreach (ProfileEntry entry in value.Players)
-                {
-                    if 
-                    (
-                        entry == null ||
-                        entry.ClientId < 0 ||
-                        !ids.Add(entry.ClientId) ||
-                        (value.Kind != ProfilePacketKind.Remove && (entry.Profile == null || !entry.Profile.IsValid))
-                    )
-                    {
-                        return false;
-                    }
-                }
-
-                packet = value;
-
-                return true;
             }
-            catch (JsonException)
-            {
-                return false;
-            }
+
+            packet = value;
+
+            return true;
         }
     }
 }

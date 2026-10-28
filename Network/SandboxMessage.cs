@@ -1,6 +1,6 @@
-using NullServers.Customization;
+﻿using NullServers.Customization;
 using NullServers.Room;
-using System.Text;
+using System.Buffers.Binary;
 using System.Text.Json;
 
 namespace NullServers.Network
@@ -21,10 +21,15 @@ namespace NullServers.Network
         Pose,
         Notice,
         PoseBatch,
-        GunState,
-        GunAim,
-        GunGrab,
-        GunRelease
+        CarryState,
+        CarryAim,
+        CarryGrab,
+        CarryRelease,
+        Flight,
+        BatchEdit,
+        BatchDelete,
+        Living,
+        Escape
     }
 
     internal enum PlayerCommand
@@ -48,8 +53,7 @@ namespace NullServers.Network
     {
         internal bool Valid(float limit = 50000f)
         {
-            return 
-                float.IsFinite(X) &&
+            return float.IsFinite(X) &&
                 float.IsFinite(Y) &&
                 float.IsFinite(Z) &&
                 Math.Abs(X) <= limit &&
@@ -60,7 +64,7 @@ namespace NullServers.Network
 
     internal sealed record Rotation4(float X, float Y, float Z, float W)
     {
-        internal bool Valid => 
+        internal bool Valid =>
             float.IsFinite(X) &&
             float.IsFinite(Y) &&
             float.IsFinite(Z) &&
@@ -68,8 +72,7 @@ namespace NullServers.Network
             X * X + Y * Y + Z * Z + W * W is > 0.95f and < 1.05f;
     }
 
-    internal sealed record BuildingObject
-    (
+    internal sealed record BuildingObject(
         int Id,
         int Owner,
         string Asset,
@@ -79,10 +82,10 @@ namespace NullServers.Network
         string Color,
         string Texture,
         bool Dynamic,
-        int Revision = 0
-    )
+        int Revision = 0,
+        bool Effects = true)
     {
-        internal bool Valid => 
+        internal bool Valid =>
             Id >= 0 &&
             Owner >= 0 &&
             Revision >= 0 &&
@@ -97,43 +100,33 @@ namespace NullServers.Network
             Appearance.ValidUrl(Texture);
     }
 
-    internal sealed record PlayerEffects(int Id, float Scale = 1f, bool Fly = false, bool Frozen = false, bool Invincible = false);
+    internal sealed record PlayerEffects(
+        int Id,
+        float Scale = 1f,
+        bool Fly = false,
+        bool Frozen = false,
+        bool Invincible = false,
+        bool Noclip = false);
 
-    internal sealed record SandboxCommand
-    (
+    internal sealed record SandboxCommand(
         PlayerCommand Action,
         int Target,
         float Value = 0f,
         string Text = null,
-        Point3 Position = null
-    );
+        Point3 Position = null);
 
-    internal sealed record RagdollDefinition(int Id, string Name, Point3 Position, string[] Bones, int Player = -1);
+    internal sealed record RagdollDefinition(
+        int Id,
+        string Name,
+        Point3 Position,
+        string[] Bones,
+        int Player = -1,
+        RagdollSkin Skin = null,
+        bool Living = false,
+        Point3 Scale = null,
+        int NPC = -1);
 
-    internal sealed record GunState
-    (
-        int Player,
-        bool Equipped,
-        int Holding = 0,
-        Point3 Position = null,
-        Rotation4 Rotation = null,
-        bool Throw = false,
-        bool Freeze = false,
-        int Sequence = 0,
-        Point3 Grip = null
-    )
-    {
-        internal bool Valid => 
-            Player is >= 0 and <= 4095 &&
-            Holding is >= 0 and < 1000000 &&
-            Sequence >= 0 &&
-            (Position == null || Position.Valid()) &&
-            (Rotation == null || Rotation.Valid) &&
-            (Grip == null || Grip.Valid(1000f));
-    }
-
-    internal sealed record SandboxMessage
-    (
+    internal sealed record SandboxMessage(
         int Version,
         string Room,
         int RoomObject,
@@ -146,11 +139,13 @@ namespace NullServers.Network
         int Id = 0,
         int Sequence = 0,
         string Data = null,
-        GunState Gun = null
-    )
+        CarryState Carry = null,
+        LivingState Living = null,
+        BuildingObject[] Objects = null,
+        double SentAt = 0d)
     {
         internal const ushort BroadcastId = 0x4E49;
-        internal const int MaxBytes = 16384;
+        internal const int MaxBytes = 131072;
         internal const int MaxObjects = 8192;
         internal const int MaxObjectsPerPlayer = 1024;
         internal static readonly JsonSerializerOptions JsonOptions = new()
@@ -158,88 +153,86 @@ namespace NullServers.Network
             DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
         };
 
+        internal static string Serialize(SandboxMessage message) => JsonSerializer.Serialize(message, JsonOptions);
+
         internal static bool CanEdit(int owner, int requester, bool administrator) => owner == requester || administrator;
+
+        internal bool AllowsChannel(bool fromHost, bool reliable) => reliable ||
+            (fromHost ? Kind is SandboxKind.Pose or SandboxKind.PoseBatch or SandboxKind.CarryState : Kind == SandboxKind.CarryAim);
 
         internal static bool TryParse(string json, out SandboxMessage message)
         {
-            message = null;
-
-            if (string.IsNullOrEmpty(json) || Encoding.UTF8.GetByteCount(json) > MaxBytes)
+            message = JsonPacket.Read<SandboxMessage>(json, MaxBytes);
+            if (message == null || !ValidHeader(message) || !ValidPayload(message) || !HasRequiredPayload(message))
             {
+                message = null;
                 return false;
             }
 
-            try
-            {
-                SandboxMessage value = JsonSerializer.Deserialize<SandboxMessage>(json);
-                if 
-                (
-                    value == null ||
-                    value.Version != 1 ||
-                    value.Room is not { Length: > 0 and <= 64 } ||
-                    value.RoomObject < 0 ||
-                    value.Epoch is not { Length: <= 32 } ||
-                    !Enum.IsDefined(typeof(SandboxKind), value.Kind) ||
-                    value.Id < 0 ||
-                    value.Sequence < 0 ||
-                    value.Data?.Length > 2048 ||
-                    value.Gun != null &&
-                    !value.Gun.Valid ||
-                    value.Object != null &&
-                    !value.Object.Valid ||
-                    value.Effects is { } effects &&
-                    (effects.Id < 0 || !float.IsFinite(effects.Scale) || effects.Scale is < 0.2f or > 5f) ||
-                    value.Command is { } command &&
-                    (!Enum.IsDefined(typeof(PlayerCommand), command.Action) ||
-                    command.Target < 0 ||
-                    !float.IsFinite(command.Value) ||
-                    command.Text?.Length > 128 ||
-                    command.Position != null &&
-                    !command.Position.Valid()) ||
-                    value.Ragdoll is { } ragdoll &&
-                    (ragdoll.Id < 1 ||
-                    ragdoll.Player < -1 ||
-                    ragdoll.Player > 4095 ||
-                    ragdoll.Name is not { Length: > 0 and <= 192 } ||
-                    ragdoll.Position?.Valid() != true ||
-                    ragdoll.Bones is not { Length: > 0 and <= 64 } ||
-                    ragdoll.Bones.Any(path => path == null || path.Length > 256) ||
-                    ragdoll.Bones.Distinct().Count() != ragdoll.Bones.Length)
-                )
-                {
-                    return false;
-                }
-
-                if 
-                (
-                    value.Kind is SandboxKind.Create or SandboxKind.Edit or SandboxKind.Object &&
-                    value.Object == null ||
-                    value.Kind == SandboxKind.Admin &&
-                    value.Command == null ||
-                    value.Kind == SandboxKind.Effects &&
-                    value.Effects == null ||
-                    value.Kind == SandboxKind.Ragdoll &&
-                    value.Ragdoll == null ||
-                    value.Kind is SandboxKind.Pose or SandboxKind.PoseBatch or SandboxKind.Notice &&
-                    value.Data == null ||
-                    value.Kind is SandboxKind.GunState or SandboxKind.GunAim or SandboxKind.GunGrab or SandboxKind.GunRelease &&
-                    value.Gun == null ||
-                    value.Kind == SandboxKind.GunAim &&
-                    (value.Gun.Position == null || value.Gun.Rotation == null)
-                )
-                {
-                    return false;
-                }
-
-                message = value;
-
-                return true;
-            }
-            catch (JsonException)
-            {
-                return false;
-            }
+            return true;
         }
+
+        private static bool ValidHeader(SandboxMessage value) =>
+            value.Version == 2 &&
+            value.Room is { Length: > 0 and <= 64 } &&
+            value.RoomObject >= 0 &&
+            value.Epoch is { Length: <= 32 } &&
+            Enum.IsDefined(typeof(SandboxKind), value.Kind) &&
+            value.Id >= 0 &&
+            value.Sequence >= 0 &&
+            double.IsFinite(value.SentAt) && value.SentAt is >= 0d and <= 1000000000d &&
+            !(value.Data?.Length > 2048);
+
+        private static bool ValidPayload(SandboxMessage value) =>
+            (value.Carry == null || value.Carry.Valid) &&
+            (value.Living == null || value.Living.Valid) &&
+            (value.Objects == null || ValidObjects(value.Objects)) &&
+            (value.Object == null || value.Object.Valid) &&
+            (value.Effects == null || ValidEffects(value.Effects)) &&
+            (value.Command == null || ValidCommand(value.Command)) &&
+            (value.Ragdoll == null || ValidRagdoll(value.Ragdoll));
+
+        private static bool ValidObjects(BuildingObject[] objects) =>
+            objects.Length is >= 1 and <= 32 &&
+            objects.All(item => item?.Valid == true) &&
+            objects.Select(item => item.Id).Distinct().Count() == objects.Length;
+
+        private static bool ValidEffects(PlayerEffects effects) =>
+            effects.Id >= 0 && float.IsFinite(effects.Scale) && effects.Scale is >= 0.2f and <= 5f;
+
+        private static bool ValidCommand(SandboxCommand command) =>
+            Enum.IsDefined(typeof(PlayerCommand), command.Action) &&
+            command.Target >= 0 &&
+            float.IsFinite(command.Value) &&
+            !(command.Text?.Length > 128) &&
+            (command.Position == null || command.Position.Valid());
+
+        private static bool ValidRagdoll(RagdollDefinition ragdoll) =>
+            ragdoll.Id >= 1 &&
+            ragdoll.Player is >= -1 and <= 4095 &&
+            ragdoll.NPC is >= -1 and < 2000000 &&
+            !(ragdoll.Living && (ragdoll.Player >= 0) == (ragdoll.NPC >= 0)) &&
+            ragdoll.Name is { Length: > 0 and <= 192 } &&
+            ragdoll.Position?.Valid() == true &&
+            (ragdoll.Scale == null || ragdoll.Scale.Valid(100f) && ragdoll.Scale.X > 0f && ragdoll.Scale.Y > 0f && ragdoll.Scale.Z > 0f) &&
+            ragdoll.Bones is { Length: > 0 and <= 64 } &&
+            ragdoll.Bones.All(path => path is { Length: <= 256 }) &&
+            (ragdoll.Skin == null || ragdoll.Skin.Valid) &&
+            ragdoll.Bones.Distinct().Count() == ragdoll.Bones.Length;
+
+        private static bool HasRequiredPayload(SandboxMessage value) => value.Kind switch
+        {
+            SandboxKind.Create or SandboxKind.Edit or SandboxKind.Object => value.Object != null,
+            SandboxKind.BatchEdit or SandboxKind.BatchDelete => value.Objects != null,
+            SandboxKind.Living => value.Living != null,
+            SandboxKind.Admin => value.Command != null,
+            SandboxKind.Effects => value.Effects != null,
+            SandboxKind.Ragdoll => value.Ragdoll != null,
+            SandboxKind.Pose or SandboxKind.PoseBatch or SandboxKind.Notice => value.Data != null,
+            SandboxKind.CarryAim => value.Carry is { Position: not null, Rotation: not null },
+            SandboxKind.CarryState or SandboxKind.CarryGrab or SandboxKind.CarryRelease => value.Carry != null,
+            _ => true
+        };
     }
 
     internal static class SandboxPose
@@ -257,11 +250,9 @@ namespace NullServers.Network
 
             for (int index = 0; index < values.Count; index++)
             {
-                System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian
-                (
+                BinaryPrimitives.WriteInt32LittleEndian(
                     bytes.AsSpan(2 + index * 4),
-                    BitConverter.SingleToInt32Bits(values[index])
-                );
+                    BitConverter.SingleToInt32Bits(values[index]));
             }
 
             return Convert.ToBase64String(bytes);
@@ -275,14 +266,11 @@ namespace NullServers.Network
             if (data == null || data.Length > 604) return false;
 
             Span<byte> bytes = stackalloc byte[450];
-            if 
-            (
-                !Convert.TryFromBase64String(data, bytes, out var count) ||
+            if (!Convert.TryFromBase64String(data, bytes, out var count) ||
                 count < 30 ||
                 bytes[1] is < 1 or > 16 ||
                 bytes[0] + bytes[1] > 64 ||
-                count != 2 + bytes[1] * 28
-            )
+                count != 2 + bytes[1] * 28)
             {
                 return false;
             }
@@ -290,7 +278,7 @@ namespace NullServers.Network
             float[] decoded = new float[bytes[1] * 7];
             for (int index = 0; index < decoded.Length; index++)
             {
-                decoded[index] = BitConverter.Int32BitsToSingle(System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(bytes.Slice(2 + index * 4, 4)));
+                decoded[index] = BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32LittleEndian(bytes.Slice(2 + index * 4, 4)));
                 if (!float.IsFinite(decoded[index]) || Math.Abs(decoded[index]) > 50000f)
                 {
                     return false;

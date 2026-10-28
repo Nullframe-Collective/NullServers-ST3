@@ -1,4 +1,4 @@
-using HarmonyLib;
+﻿using HarmonyLib;
 using Il2Cpp;
 using Il2CppFishNet.Connection;
 using Il2CppFishNet.Transporting.Relay;
@@ -25,21 +25,20 @@ namespace NullServers.Server
         private string _roomId;
         private float _nextState;
         private string _pendingNotice;
+        private EnvironmentSettings _environment = new();
 
-        internal BanList Mutes { get; } = new
-        (
+        internal BanList Mutes { get; } = new(
             Path.Combine(MelonEnvironment.UserDataDirectory, "NullFrame", "mutes.json"),
-            "mute list"
-        );
+            "mute list");
 
         internal bool CanOpen => _control.CanManage || (InRoom && _roomId == _control.Room.Id && _state?.Trusted == true);
 
         internal string Status { get; private set; }
+        internal EnvironmentSettings Environment => _control.CanManage ? _environment : _state?.Environment ?? new EnvironmentSettings();
 
         internal bool IsAdministrator(int id)
         {
-            return 
-                _control.CanManage &&
+            return _control.CanManage &&
                 (id == RelayProtocol.HostPlayerId ||
                 _control.TryIdentity(id, out var identity) &&
                 _permissions.Allows(id, identity.Username));
@@ -79,11 +78,15 @@ namespace NullServers.Server
                 _lastMuteNotice.Clear();
                 Status = _pendingNotice = null;
                 _nextState = 0f;
+                _environment = new EnvironmentSettings();
             }
 
-            if (_pendingNotice != null && MultiplayerChat.CFNPNLGIHMH && RoomMultiplayerMenu.GJDGDIGECJN?.CJNLEDLNGID == true)
+            _control.Rendering.Update(InRoom && RoomMultiplayerMenu.Current?.IsInitialized == true, Environment.Rendering);
+            _control.Rendering.Geometry.Update(InRoom && RoomMultiplayerMenu.Current?.IsInitialized == true, Environment.World);
+
+            if (_pendingNotice != null && MultiplayerChat.Current && RoomMultiplayerMenu.Current?.IsInitialized == true)
             {
-                MultiplayerChat.CFNPNLGIHMH.HLIDELGJEON("NullFrame: ", _pendingNotice, "");
+                MultiplayerChat.Current.AddLocalMessage("NullFrame: ", _pendingNotice, "");
                 _pendingNotice = null;
             }
 
@@ -92,12 +95,9 @@ namespace NullServers.Server
             _nextState = Time.unscaledTime + 1f;
             foreach (int id in _permissions.Clients.ToArray())
             {
-                if 
-                (
-                    !_control.Manager.ServerManager.Clients.ContainsKey(id) ||
+                if (!_control.Manager.ServerManager.Clients.ContainsKey(id) ||
                     !_control.TryIdentity(id, out var identity) ||
-                    !_permissions.Allows(id, identity.Username)
-                )
+                    !_permissions.Allows(id, identity.Username))
                 {
                     _permissions.Revoke(id);
                 }
@@ -109,13 +109,12 @@ namespace NullServers.Server
                 if (!connection.IsAuthenticated) continue;
 
                 bool trusted = players.Any(player => player.Id == connection.ClientId && player.Trusted);
-                ServerState state = new
-                (
+                ServerState state = new(
                     trusted,
                     players,
                     trusted ? _control.Bans.Entries.Take(100).ToArray() : Array.Empty<BanEntry>(),
-                    trusted ? Mutes.Entries.Take(100).ToArray() : Array.Empty<BanEntry>()
-                );
+                    trusted ? Mutes.Entries.Take(100).ToArray() : Array.Empty<BanEntry>(),
+                    _environment);
                 string json = JsonSerializer.Serialize(state);
 
                 if (_sentStates.GetValueOrDefault(connection.ClientId) == json)
@@ -126,11 +125,8 @@ namespace NullServers.Server
                 _sentStates[connection.ClientId] = json;
                 _profiles.SendServerMessage(new ServerMessage(1, roomId, State: state), connection);
 
-                if 
-                (
-                    players.Any(player => player.Id == connection.ClientId && player.Muted) &&
-                    !_lastMuteNotice.ContainsKey(connection.ClientId)
-                )
+                if (players.Any(player => player.Id == connection.ClientId && player.Muted) &&
+                    !_lastMuteNotice.ContainsKey(connection.ClientId))
                 {
                     NotifyMuted(connection);
                 }
@@ -151,19 +147,15 @@ namespace NullServers.Server
         {
             return _control.Connections()
             .Where(connection => connection.IsAuthenticated)
-            .Select
-            (
+            .Select(
                 connection => _control.TryIdentity(connection.ClientId, out var identity)
-                ? new RoomPlayer
-                (
+                ? new RoomPlayer(
                     connection.ClientId,
                     identity.Username,
                     _control.PlayerName(connection.ClientId, identity),
                     identity.IsGuest,
                     _permissions.Allows(connection.ClientId, identity.Username),
-                    Mutes.Contains(identity.Username)
-                ) : null
-            )
+                    Mutes.Contains(identity.Username)) : null)
             .Where(player => player != null).OrderBy(player => player.Id).ToArray();
         }
 
@@ -185,14 +177,11 @@ namespace NullServers.Server
         {
             error = "Only the host can grant or revoke administrator access.";
 
-            if 
-            (
-                !_control.CanManage ||
+            if (!_control.CanManage ||
                 id == RelayProtocol.HostPlayerId ||
                 !_control.TryIdentity(id, out var identity) ||
                 identity.Username != account ||
-                !_control.Manager.ServerManager.Clients.ContainsKey(id)
-            )
+                !_control.Manager.ServerManager.Clients.ContainsKey(id))
             {
                 return false;
             }
@@ -217,6 +206,34 @@ namespace NullServers.Server
             return true;
         }
 
+        internal bool SetEnvironment(EnvironmentSettings environment, out string error)
+        {
+            if (!_control.CanManage)
+            {
+                return Submit(new ServerRequest(ServerAction.Environment, Environment: environment), out error);
+            }
+
+            error = "Check the environment settings.";
+            if (environment?.Valid != true) return false;
+
+            if (!_control.Rendering.Geometry.Validate(environment.World, out error))
+            {
+                return false;
+            }
+
+            if (environment.Rendering is { Skybox: true, SkyboxUrl: "" } rendering &&
+                !_control.Rendering.Skyboxes.ContainsKey(rendering.SkyboxName))
+            {
+                error = "Choose an available skybox.";
+                return false;
+            }
+
+            _environment = environment;
+            _nextState = 0f;
+            error = null;
+            return true;
+        }
+
         internal bool SetMuted(int id, string account, bool muted, out string error)
         {
             if (!_control.CanManage)
@@ -226,26 +243,20 @@ namespace NullServers.Server
 
             error = "The selected account is unavailable.";
 
-            if 
-            (
-                string.IsNullOrWhiteSpace(account) ||
+            if (string.IsNullOrWhiteSpace(account) ||
                 (id >= 0 &&
                 (!_control.TryIdentity(id, out var identity) ||
                 identity.Username != account)) ||
                 id == RelayProtocol.HostPlayerId ||
                 (_control.TryIdentity(RelayProtocol.HostPlayerId, out var host) &&
-                string.Equals(host.Username, account, StringComparison.OrdinalIgnoreCase))
-            )
+                string.Equals(host.Username, account, StringComparison.OrdinalIgnoreCase)))
             {
                 return false;
             }
 
-            if 
-            (
-                !(muted ? Mutes.Add(account, id >= 0 ? 
-                _control.PlayerName(id, null) : account, out error) : 
-                Mutes.Remove(account, out error))
-            )
+            if (!(muted ? Mutes.Add(account, id >= 0 ?
+                _control.PlayerName(id, null) : account, out error) :
+                Mutes.Remove(account, out error)))
             {
                 return false;
             }
@@ -253,13 +264,11 @@ namespace NullServers.Server
             _nextState = 0f;
             if (id >= 0)
             {
-                Notice
-                (
+                Notice(
                     id,
-                    muted ? 
-                    "The host muted your chat. You cannot send messages until you are unmuted." : 
-                    "The host unmuted your chat."
-                );
+                    muted ?
+                    "The host muted your chat. You cannot send messages until you are unmuted." :
+                    "The host unmuted your chat.");
 
                 if (muted)
                 {
@@ -276,14 +285,11 @@ namespace NullServers.Server
 
         private void ReceiveRequest(NetworkConnection connection, ServerMessage message)
         {
-            if 
-            (
-                !_control.CanManage ||
+            if (!_control.CanManage ||
                 message.RoomId != _control.Room.Id ||
                 message.Request == null ||
                 !connection.IsValid ||
-                !connection.IsAuthenticated
-            )
+                !connection.IsAuthenticated)
             {
                 return;
             }
@@ -302,6 +308,13 @@ namespace NullServers.Server
             }
 
             ServerRequest request = message.Request;
+            if (request.Environment is { } environment &&
+                (environment.KeepRagdolls != _environment.KeepRagdolls || environment.ThrowAnyone != _environment.ThrowAnyone))
+            {
+                Notice(id, "Only the host can change ragdoll persistence and Throw Any One.");
+                return;
+            }
+
             string error;
 
             bool success = request.Action switch
@@ -321,6 +334,7 @@ namespace NullServers.Server
                 ServerAction.Reopen => _control.Reopen(out error),
                 ServerAction.Mute => SetMuted(request.PlayerId, request.Account, true, out error),
                 ServerAction.Unmute => SetMuted(request.PlayerId, request.Account, false, out error),
+                ServerAction.Environment => SetEnvironment(request.Environment, out error),
                 _ => InvalidAction(out error)
             };
 
@@ -346,6 +360,12 @@ namespace NullServers.Server
 
             if (message.Notice != null)
             {
+                if (message.Notice == GlobalBlacklist.BannedMessage)
+                {
+                    _session.RejectCommunity(message.Notice);
+                    return;
+                }
+
                 Status = _pendingNotice = message.Notice;
             }
         }
@@ -372,14 +392,11 @@ namespace NullServers.Server
         private static bool BeforeChatMessage(NetworkConnection __2)
         {
             ServerAccess instance = _instance;
-            if 
-            (
-                !instance._control.CanManage ||
+            if (!instance._control.CanManage ||
                 __2 == null ||
                 !__2.IsAuthenticated ||
                 !instance._control.TryIdentity(__2.ClientId, out var identity) ||
-                !instance.Mutes.Contains(identity.Username)
-            )
+                !instance.Mutes.Contains(identity.Username))
             {
                 return true;
             }

@@ -2,8 +2,8 @@ using HarmonyLib;
 using Il2Cpp;
 using Il2CppFishNet.Transporting.Relay;
 using Il2CppInterop.Runtime;
-using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using NullServers.Network;
+using NullServers.UI;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -36,7 +36,7 @@ namespace NullServers.Players
         private static void AfterMenuUpdate(RoomMultiplayerMenu __instance)
         {
             PlayerList instance = _instance;
-            if (!__instance.IOMIAHNBDOG || Time.unscaledTime < instance._nextUpdate)
+            if (!__instance.IsPaused || Time.unscaledTime < instance._nextUpdate)
             {
                 return;
             }
@@ -47,19 +47,16 @@ namespace NullServers.Players
 
         private void Refresh(RoomMultiplayerMenu menu, bool configure)
         {
-            if 
-            (
-                !_session.IsNullFrame ||
+            if (!_session.IsNullFrame ||
                 _session.IsSwitching ||
                 !_session.Relay ||
                 _session.Relay.CurrentRoom == null ||
-                menu.HOKHMBNMGHC == null
-            )
+                menu.PlayerRows == null)
             {
                 return;
             }
 
-            foreach (var entry in menu.HOKHMBNMGHC)
+            foreach (var entry in menu.PlayerRows)
             {
                 PlayerInfo player = entry.Key;
                 Text name = entry.Value;
@@ -84,22 +81,10 @@ namespace NullServers.Players
 
                 Transform info = row.Find("ExtraInfo");
                 Text stats = info ? info.GetComponentInChildren(Il2CppType.Of<Text>(), true)?.Cast<Text>() : null;
+
                 if (!stats)
                 {
-                    GameObject label = new
-                    (
-                        "ExtraInfo",
-                        new Il2CppReferenceArray<Il2CppSystem.Type>
-                        (
-                            [
-                                Il2CppType.Of<RectTransform>(),
-                                Il2CppType.Of<CanvasRenderer>(),
-                                Il2CppType.Of<Text>()
-                            ]
-                        )
-                    );
-                    label.transform.SetParent(row, false);
-                    stats = label.GetComponent(Il2CppType.Of<Text>()).Cast<Text>();
+                    stats = GameUi.Create<Text>("ExtraInfo", row);
                     configure = true;
                 }
 
@@ -112,10 +97,8 @@ namespace NullServers.Players
                     nameRect.offsetMax = new Vector2(-8, 0f);
 
                     name.alignment = TextAnchor.MiddleLeft;
-                    name.supportRichText = false;
-                    name.resizeTextForBestFit = true;
-                    name.resizeTextMinSize = 12;
-                    name.resizeTextMaxSize = Mathf.Max(12, name.fontSize);
+                    name.supportRichText = true;
+                    GameUi.Fit(name, 12, Mathf.Max(12, name.fontSize));
 
                     RectTransform statsRect = stats.rectTransform;
                     statsRect.anchorMin = new Vector2(0.59f, 0f);
@@ -125,9 +108,7 @@ namespace NullServers.Players
 
                     stats.font = name.font;
                     stats.fontSize = name.fontSize;
-                    stats.resizeTextForBestFit = true;
-                    stats.resizeTextMinSize = 12;
-                    stats.resizeTextMaxSize = Mathf.Max(12, name.fontSize);
+                    GameUi.Fit(stats, 12, Mathf.Max(12, name.fontSize));
                     stats.alignment = TextAnchor.MiddleRight;
                     stats.supportRichText = false;
                     stats.raycastTarget = false;
@@ -139,14 +120,15 @@ namespace NullServers.Players
                     stats.gameObject.SetActive(true);
                 }
 
-                string nickname = _profiles.TryGet(player.COJDPMKCLCM, out var profile) ? profile.Nickname : player.HOGIPFLCOLH;
-                string title = nickname + (player.COJDPMKCLCM == RelayProtocol.HostPlayerId ? " (Host)" : "");
+                string nickname = _profiles.TryGet(player.ClientId, out var profile) ? profile.RichName : player.Nickname;
+                string title = nickname + (player.ClientId == RelayProtocol.HostPlayerId ? " (Host)" : "");
+
                 if (name.text != title)
                 {
                     name.text = title;
                 }
 
-                string score = $"Kills: {player.ANGFKCCEJKD}   Deaths: {player.DDLEOEFHMKL}";
+                string score = $"Kills: {player.Kills}   Deaths: {player.Deaths}";
                 if (stats.text != score)
                 {
                     stats.text = score;

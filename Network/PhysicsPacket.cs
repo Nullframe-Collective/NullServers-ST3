@@ -1,4 +1,4 @@
-using System.Buffers.Binary;
+﻿using System.Buffers.Binary;
 
 namespace NullServers.Network
 {
@@ -29,30 +29,16 @@ namespace NullServers.Network
                 BinaryPrimitives.WriteSingleLittleEndian(span[13..], pose.Position.Z);
                 Rotation4 rotation = pose.Rotation;
 
-                BinaryPrimitives.WriteInt16LittleEndian
-                (
-                    span[17..],
-                    (short)Math.Clamp(MathF.Round(rotation.X * 32767f), -32767, 32767f)
-                );
-                BinaryPrimitives.WriteInt16LittleEndian
-                (
-                    span[19..],
-                    (short)Math.Clamp(MathF.Round(rotation.Y * 32767f), -32767, 32767f)
-                );
-                BinaryPrimitives.WriteInt16LittleEndian
-                (
-                    span[21..],
-                    (short)Math.Clamp(MathF.Round(rotation.Z * 32767f), -32767, 32767f)
-                );
-                BinaryPrimitives.WriteInt16LittleEndian
-                (
-                    span[23..],
-                    (short)Math.Clamp(MathF.Round(rotation.W * 32767f), -32767, 32767f)
-                );
+                BinaryPrimitives.WriteInt16LittleEndian(span[17..], Pack(rotation.X));
+                BinaryPrimitives.WriteInt16LittleEndian(span[19..], Pack(rotation.Y));
+                BinaryPrimitives.WriteInt16LittleEndian(span[21..], Pack(rotation.Z));
+                BinaryPrimitives.WriteInt16LittleEndian(span[23..], Pack(rotation.W));
             }
 
             return Convert.ToBase64String(bytes);
         }
+
+        private static short Pack(float value) => (short)Math.Clamp(MathF.Round(value * 32767f), -32767f, 32767f);
 
         internal static bool TryDecode(string data, out PhysicsPose[] poses)
         {
@@ -73,19 +59,15 @@ namespace NullServers.Network
                 int id = BinaryPrimitives.ReadInt32LittleEndian(span);
                 byte bone = span[4];
 
-                Point3 position = new
-                (
+                Point3 position = new(
                     BinaryPrimitives.ReadSingleLittleEndian(span[5..]),
                     BinaryPrimitives.ReadSingleLittleEndian(span[9..]),
-                    BinaryPrimitives.ReadSingleLittleEndian(span[13..])
-                );
-                Rotation4 rotation = new
-                (
+                    BinaryPrimitives.ReadSingleLittleEndian(span[13..]));
+                Rotation4 rotation = new(
                     BinaryPrimitives.ReadInt16LittleEndian(span[17..]) / 32767f,
                     BinaryPrimitives.ReadInt16LittleEndian(span[19..]) / 32767f,
                     BinaryPrimitives.ReadInt16LittleEndian(span[21..]) / 32767f,
-                    BinaryPrimitives.ReadInt16LittleEndian(span[23..]) / 32767f
-                );
+                    BinaryPrimitives.ReadInt16LittleEndian(span[23..]) / 32767f);
 
                 if (id < 1 || (id < 1000000 ? bone != 255 : bone > 63) || !position.Valid() || !rotation.Valid)
                 {
@@ -106,22 +88,26 @@ namespace NullServers.Network
         private readonly double _rate, _burst;
         private double _tokens, _time;
 
-        internal TrafficBudget(double bytesPerSecond, double burst)
+        internal TrafficBudget(double perSecond, double burst, double now = 0d)
         {
-            _rate = bytesPerSecond;
+            _rate = perSecond;
             _burst = burst;
             _tokens = burst;
+            _time = now;
+        }
+
+        internal bool CanSpend(int amount, double now)
+        {
+            _tokens = Math.Min(_burst, _tokens + Math.Max(0, now - _time) * _rate);
+            _time = Math.Max(now, _time);
+            return amount >= 0 && amount <= _tokens;
         }
 
         internal bool Spend(int bytes, double now)
         {
-            _tokens = Math.Min(_burst, _tokens + Math.Max(0, now - _time) * _rate);
-            _time = now;
-
-            if (bytes < 0 || bytes > _tokens) return false;
+            if (!CanSpend(bytes, now)) return false;
 
             _tokens -= bytes;
-
             return true;
         }
     }

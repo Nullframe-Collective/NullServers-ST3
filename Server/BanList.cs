@@ -53,14 +53,12 @@ namespace NullServers.Server
             if (string.IsNullOrWhiteSpace(account))
             {
                 error = "The authenticated account is unavailable.";
-
                 return false;
             }
 
             if (Contains(account))
             {
                 error = null;
-
                 return true;
             }
 
@@ -78,12 +76,10 @@ namespace NullServers.Server
 
         internal bool Remove(string account, out string error)
         {
-            return Save
-            (
+            return Save(
                 _entries.Where(entry =>
                 !string.Equals(entry.Account, account, StringComparison.OrdinalIgnoreCase)).ToList(),
-                out error
-            );
+                out error);
         }
 
         private bool Save(List<BanEntry> entries, out string error)
@@ -105,7 +101,6 @@ namespace NullServers.Server
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
                 error = $"Cannot save the {_label}: " + exception.Message;
-
                 return false;
             }
         }

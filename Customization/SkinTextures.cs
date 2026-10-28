@@ -1,29 +1,57 @@
 using NullServers.Additional;
 using UnityEngine;
-using UnityEngine.Networking;
 
 namespace NullServers.Customization
 {
     internal sealed class SkinTextures : IDisposable
     {
-        private sealed class Download
+        private const int MaxDownloads = 4;
+        private const long CacheLimit = 128L * 1024 * 1024;
+
+        private sealed class Download : IDisposable
         {
-            internal UnityWebRequest Request;
+            internal CancellationTokenSource Cancellation;
+            internal Task<byte[]> Task;
             internal Texture2D Texture;
             internal string Error;
             internal float UsedAt;
             internal bool Finished;
             internal int Bytes;
+
+            internal void Finish()
+            {
+                Cancellation?.Dispose();
+                Cancellation = null;
+                Task = null;
+                Finished = true;
+            }
+
+            public void Dispose()
+            {
+                Cancellation?.Cancel();
+                Finish();
+
+                if (Texture)
+                {
+                    UnityEngine.Object.Destroy(Texture);
+                }
+            }
         }
 
         private readonly Dictionary<string, Download> _downloads = new(StringComparer.Ordinal);
-        private int _textureBytes;
+        private long _textureBytes;
+        private readonly bool _readable;
+
+        internal SkinTextures(bool readable = false)
+        {
+            _readable = readable;
+        }
 
         internal string ErrorFor(IEnumerable<string> urls) => urls.Select(url => _downloads.GetValueOrDefault(url)?.Error).FirstOrDefault(error => error != null);
 
         internal Texture2D Get(string url)
         {
-            if (!Appearance.ValidUrl(url) || string.IsNullOrEmpty(url)) return null;
+            if (string.IsNullOrEmpty(url) || !Appearance.ValidUrl(url)) return null;
 
             if (!_downloads.TryGetValue(url, out var download))
             {
@@ -34,118 +62,73 @@ namespace NullServers.Customization
             return download.Texture;
         }
 
+        internal Texture2D[] Get(Appearance appearance) => appearance.Urls.Select(url => appearance.UseSkin ? Get(url) : null).ToArray();
+
         internal void Update()
         {
-            int active = _downloads.Values.Count(download => download.Request != null);
+            int active = _downloads.Values.Count(download => download.Task != null);
 
             foreach (var pair in _downloads.ToArray())
             {
                 Download download = pair.Value;
                 if (Time.unscaledTime - download.UsedAt > 60f)
                 {
-                    download.Request?.Abort();
-                    download.Request?.Dispose();
-                    if (download.Texture)
-                    {
-                        UnityEngine.Object.Destroy(download.Texture);
-                    }
-
+                    download.Dispose();
                     _textureBytes -= download.Bytes;
                     _downloads.Remove(pair.Key);
-
                     continue;
                 }
 
                 if (download.Finished) continue;
 
-                if (download.Request == null)
+                if (download.Task == null)
                 {
-                    if (active >= 4) continue;
+                    if (active >= MaxDownloads) continue;
 
-                    try
-                    {
-                        download.Request = UnityWebRequest.Get(pair.Key);
-                        download.Request.timeout = 20;
-                        download.Request.redirectLimit = 3;
-                        download.Request.SendWebRequest();
-                    }
-                    catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or NotSupportedException)
-                    {
-                        download.Request?.Dispose();
-                        download.Request = null;
-                        download.Error = "Cannot load skin image: " + exception.Message;
-                        download.Finished = true;
-
-                        continue;
-                    }
-
+                    download.Cancellation = new CancellationTokenSource();
+                    download.Task = PublicImage.Download(pair.Key, download.Cancellation.Token);
                     active++;
                 }
 
-                UnityWebRequest request = download.Request;
-                if (request.downloadedBytes > 8 * 1024 * 1024)
+                if (!download.Task.IsCompleted) continue;
+
+                try
                 {
-                    request.Abort();
-                    download.Error = "Skin image exceeds 8 MB.";
+                    Decode(download, download.Task.GetAwaiter().GetResult());
+                }
+                catch (Exception exception) when (exception is not OutOfMemoryException)
+                {
+                    download.Error = "Cannot load skin image: " + exception.GetBaseException().Message;
                 }
 
-                if (!request.isDone) continue;
-
-                if (download.Error == null && request.result == UnityWebRequest.Result.Success)
-                {
-                    var data = request.downloadHandler.data;
-                    if (!ImageDimensions.Allowed(data.ToArray()))
-                    {
-                        download.Error = "Use a PNG or JPEG image up to 2048 × 2048.";
-                        request.Dispose();
-                        download.Request = null;
-                        download.Finished = true;
-                        active--;
-
-                        continue;
-                    }
-
-                    Texture2D texture = new(2, 2, TextureFormat.RGBA32, false);
-                    bool decoded = ImageConversion.LoadImage(texture, data, true);
-                    long bytes = decoded ? texture.width * texture.height * 4L : 0;
-                    if (decoded && texture.width <= 2048 && texture.height <= 2048 && _textureBytes + bytes <= 128L * 1024 * 1024)
-                    {
-                        download.Texture = texture;
-                        download.Bytes = (int)bytes;
-                        _textureBytes += download.Bytes;
-                    }
-                    else
-                    {
-                        if (texture)
-                        {
-                            UnityEngine.Object.Destroy(texture);
-                        }
-
-                        download.Error = decoded ? "Image size or the 128 MB texture cache limit was exceeded." : "The skin URL did not return a supported image.";
-                    }
-                }
-                else
-                {
-                    download.Error ??= "Cannot load skin image: " + request.error;
-                }
-
-                request.Dispose();
-                download.Request = null;
-                download.Finished = true;
+                download.Finish();
                 active--;
             }
+        }
+
+        private void Decode(Download download, byte[] data)
+        {
+            Texture2D texture = new(2, 2, TextureFormat.RGBA32, false);
+            bool decoded = ImageConversion.LoadImage(texture, data, !_readable);
+            long bytes = decoded ? texture.width * texture.height * 4L : 0;
+
+            if (decoded && texture.width <= 2048 && texture.height <= 2048 && _textureBytes + bytes <= CacheLimit)
+            {
+                download.Texture = texture;
+                download.Bytes = (int)bytes;
+                _textureBytes += bytes;
+                return;
+            }
+
+            UnityEngine.Object.Destroy(texture);
+            download.Error = decoded ? "Image size or the 128 MB texture cache limit was exceeded." : "The skin URL did not return a supported image.";
         }
 
         public void Dispose()
         {
             foreach (Download download in _downloads.Values)
             {
-                download.Request?.Abort();
-                download.Request?.Dispose();
-                if (download.Texture)
-                {
-                    UnityEngine.Object.Destroy(download.Texture);
-                }
+                download.Dispose();
             }
 
             _downloads.Clear();

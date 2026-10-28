@@ -1,4 +1,4 @@
-using Il2Cpp;
+﻿using Il2Cpp;
 using Il2CppInterop.Runtime;
 using NullServers.Network;
 using UnityEngine;
@@ -17,8 +17,13 @@ namespace NullServers.Sandbox
             internal Vector3 Position;
             internal Quaternion Rotation;
             internal int Sequence;
+            internal readonly PhysicsBuffer Motion = new();
             internal Vector3 BaseScale;
+            internal PropEffects Effects;
+            internal Texture AppliedTexture;
         }
+
+        private static readonly int[] EdgeOrder = [0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7];
 
         private readonly SandboxWorld _world;
         private readonly Dictionary<int, Placed> _objects = new();
@@ -26,6 +31,7 @@ namespace NullServers.Sandbox
         private readonly List<string> _recent = new();
         private readonly List<(Renderer Renderer, bool Enabled)> _hiddenSelected = new();
         private GameObject _ghost;
+        private Renderer[] _ghostRenderers = Array.Empty<Renderer>();
         private Material _ghostMaterial;
         private BuildingObject _draft;
         private bool _hasSurface;
@@ -38,6 +44,9 @@ namespace NullServers.Sandbox
         private float _undoRequestedAt;
         private int _inputFrame = -1;
         private bool _selecting;
+        private readonly HashSet<int> _selection = new();
+        internal int SelectionCount => _selection.Count;
+        internal IReadOnlyCollection<int> Selection => _selection;
         private GameObject _outline;
         private Transform[] _outlineEdges;
         private Material _outlineMaterial;
@@ -46,8 +55,8 @@ namespace NullServers.Sandbox
         private float _actorCheck;
         private float _clickAfter;
 
-        internal bool Placing => _ghost || _selecting;
-        internal bool SuppressWeapons => _world.Gun.Equipped;
+        internal bool Placing => _ghost;
+        internal bool SuppressWeapons => _world.Hands.UsingTool;
         internal bool Selecting => _selecting;
         internal bool Editing => _editing;
         internal int SelectedId => _editing ? _draft?.Id ?? 0 : 0;
@@ -95,32 +104,21 @@ namespace NullServers.Sandbox
                         return "This object is not available on the host.";
                     }
 
-                    if 
-                    (
-                        state.Dynamic &&
-                        _objects.Values.Count(item => item.State.Dynamic && item.State.Id != state.Id) >= 64
-                    )
+                    if (state.Dynamic && _objects.Values.Count(item => item.State.Dynamic && item.State.Id != state.Id) >= 64)
                     {
                         return "This room already has 64 building objects with active physics.";
                     }
 
                     if (message.Kind == SandboxKind.Create)
                     {
-                        if 
-                        (
-                            _objects.Count >= SandboxMessage.MaxObjects ||
-                            _objects.Values.Count(item => item.State.Owner == sender) >= SandboxMessage.MaxObjectsPerPlayer
-                        )
+                        if (_objects.Count >= SandboxMessage.MaxObjects ||
+                            _objects.Values.Count(item => item.State.Owner == sender) >= SandboxMessage.MaxObjectsPerPlayer)
                         {
                             return $"Building limit reached ({SandboxMessage.MaxObjectsPerPlayer} per player, {SandboxMessage.MaxObjects} per room).";
                         }
 
                         PlayerNetworkController avatar = SandboxWorld.Avatar(sender);
-                        if 
-                        (
-                            !avatar ||
-                            Vector3.Distance(avatar.transform.position, SandboxWorld.Vector(state.Position)) > 120f
-                        )
+                        if (!avatar || Vector3.Distance(avatar.transform.position, SandboxWorld.Vector(state.Position)) > 120f)
                         {
                             return "Place objects within 120 metres of your character.";
                         }
@@ -141,11 +139,8 @@ namespace NullServers.Sandbox
                     }
                     else
                     {
-                        if 
-                        (
-                            !_objects.TryGetValue(state.Id, out var item) ||
-                            !SandboxMessage.CanEdit(item.State.Owner, sender, admin)
-                        )
+                        if (!_objects.TryGetValue(state.Id, out var item) ||
+                            !SandboxMessage.CanEdit(item.State.Owner, sender, admin))
                         {
                             return "You can edit your own objects. Administrators can edit all objects.";
                         }
@@ -176,11 +171,8 @@ namespace NullServers.Sandbox
                     return null;
                 case SandboxKind.Delete:
 
-                    if 
-                    (
-                        !_objects.TryGetValue(message.Id, out var deleted) ||
-                        !SandboxMessage.CanEdit(deleted.State.Owner, sender, admin)
-                    )
+                    if (!_objects.TryGetValue(message.Id, out var deleted) ||
+                        !SandboxMessage.CanEdit(deleted.State.Owner, sender, admin))
                     {
                         return "You cannot delete this object.";
                     }
@@ -237,6 +229,7 @@ namespace NullServers.Sandbox
                 _objects[state.Id] = item = new Placed
                 {
                     Root = root,
+                    Effects = new PropEffects(root),
                     BaseScale = root.transform.localScale
                 };
 
@@ -257,23 +250,25 @@ namespace NullServers.Sandbox
                 item.Materials = materials.ToArray();
             }
 
+            item.Motion.Clear();
             item.State = state;
-            item.Root.transform.SetPositionAndRotation
-            (
+            item.Effects.Apply(state.Effects);
+            item.Root.transform.SetPositionAndRotation(
                 SandboxWorld.Vector(state.Position),
-                SandboxWorld.Quaternion(state.Rotation)
-            );
+                SandboxWorld.Quaternion(state.Rotation));
             item.Root.transform.localScale = Vector3.Scale(item.BaseScale, SandboxWorld.Vector(state.Scale));
             item.Position = item.Root.transform.position;
             item.Rotation = item.Root.transform.rotation;
 
             ColorUtility.TryParseHtmlString(state.Color, out Color color);
-            
+
             foreach (var pair in item.Materials)
             {
                 pair.Material.color = color;
                 pair.Material.mainTexture = pair.Texture;
             }
+
+            item.AppliedTexture = null;
 
             Rigidbody body = item.Root.GetComponent(Il2CppType.Of<Rigidbody>())?.Cast<Rigidbody>();
             if (state.Dynamic && !body)
@@ -286,12 +281,10 @@ namespace NullServers.Sandbox
                 body.isKinematic = !_world.IsHost || !state.Dynamic;
                 body.useGravity = state.Dynamic;
                 body.interpolation = RigidbodyInterpolation.Interpolate;
-                body.mass = Mathf.Clamp
-                (
+                body.mass = Mathf.Clamp(
                     item.Root.transform.localScale.x * item.Root.transform.localScale.y * item.Root.transform.localScale.z,
                     0.1f,
-                    100f
-                );
+                    100f);
             }
 
             if (created && state.Owner == _world.LocalId)
@@ -303,7 +296,7 @@ namespace NullServers.Sandbox
         internal void Remove(int id)
         {
             _world.Physics.Forget(id);
-            _world.Gun.Removed(id);
+            _world.Hands.Removed(id);
             _undo.Remove(id);
 
             if (_undoPending == id)
@@ -315,6 +308,8 @@ namespace NullServers.Sandbox
             {
                 Stop();
             }
+
+            _selection.Remove(id);
 
             _pending.Remove(id);
             if (!_objects.Remove(id, out var item)) return;
@@ -338,18 +333,7 @@ namespace NullServers.Sandbox
             _undo.Clear();
             _undoPending = 0;
 
-            if (_outline)
-            {
-                Object.Destroy(_outline);
-            }
-
-            if (_outlineMaterial)
-            {
-                Object.Destroy(_outlineMaterial);
-            }
-
-            _outline = null;
-            _outlineMaterial = null;
+            DestroyPreview(ref _outline, ref _outlineMaterial);
             _localAvatar = _localController = null;
             _actorCheck = 0f;
 
@@ -364,11 +348,10 @@ namespace NullServers.Sandbox
 
         internal void Start(string asset)
         {
-            _world.Gun.Equip(true);
+            _world.Hands.Equip(true);
             Stop();
 
-            _draft = new BuildingObject
-            (
+            _draft = new BuildingObject(
                 0,
                 Math.Max(0, _world.LocalId),
                 asset,
@@ -377,8 +360,7 @@ namespace NullServers.Sandbox
                 new Point3(1f, 1f, 1f),
                 "#FFFFFF",
                 "",
-                false
-            );
+                false);
             _editing = false;
 
             CreateGhost();
@@ -397,6 +379,20 @@ namespace NullServers.Sandbox
             return SelectItem(Target());
         }
 
+        internal void Duplicate(BuildingObject state)
+        {
+            _world.Hands.Equip(true);
+            Stop();
+            _draft = state with
+            {
+                Id = 0,
+                Owner = Math.Max(0, _world.LocalId),
+                Revision = 0
+            };
+            _editing = false;
+            CreateGhost();
+        }
+
         private Placed Target()
         {
             Camera camera = Camera.main;
@@ -413,19 +409,28 @@ namespace NullServers.Sandbox
                 return false;
             }
 
-            Placed item = _objects.Values.FirstOrDefault
-            (
-                value => value.Root &&
-                (hit.transform == value.Root.transform ||
-                hit.transform.IsChildOf(value.Root.transform))
-            );
-
+            Placed item = PlacedAt(hit.transform);
             if (item == null) return false;
 
             id = item.State.Id;
             point = hit.point;
 
             return true;
+        }
+
+        private Placed PlacedAt(Transform node)
+        {
+            for (; node; node = node.parent)
+            {
+                string name = node.name;
+                if (name.StartsWith("Build_", StringComparison.Ordinal) && int.TryParse(name.AsSpan(6), out int id) &&
+                    _objects.TryGetValue(id, out var item) && item.Root && item.Root.transform == node)
+                {
+                    return item;
+                }
+            }
+
+            return null;
         }
 
         private bool SelectItem(Placed item)
@@ -438,37 +443,37 @@ namespace NullServers.Sandbox
                 return false;
             }
 
-            Stop();
-
-            _draft = item.State with
+            bool additive = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+            if (!additive)
             {
-                Position = SandboxWorld.Point(item.Root.transform.position),
-                Rotation = SandboxWorld.Rotation(item.Root.transform.rotation)
-            };
-
-            _editing = true;
-
-            CreateGhost();
-
-            foreach (Renderer renderer in item.Root.GetComponentsInChildren<Renderer>())
-            {
-                _hiddenSelected.Add((renderer, renderer.enabled));
-                renderer.enabled = false;
+                _selection.Clear();
             }
 
-            _world.SetStatus("Selected " + (_world.Assets.Find(item.State.Asset)?.Name ?? "object") + " #" + item.State.Id + ". Z: delete. Building > Edit selected: settings.");
-
+            if (additive && _selection.Contains(item.State.Id))
+            {
+                _selection.Remove(item.State.Id);
+            }
+            else if (_selection.Count < 32)
+            {
+                _selection.Add(item.State.Id);
+            }
+            else { _world.SetStatus("Select up to 32 objects at once."); return false; }
+            DestroyPreview(ref _ghost, ref _ghostMaterial);
+            _draft = _selection.Count > 0 ? _objects[_selection.Last()].State : null;
+            _editing = _draft != null;
+            _selecting = true;
+            _world.SetStatus($"Selected {_selection.Count} object(s). Shift + LMB: add/remove. Building > Object settings: edit.");
             return true;
         }
 
         internal void BeginSelection()
         {
-            _world.Gun.Equip(true);
+            _world.Hands.Equip(true);
             Stop();
             _selecting = true;
             _clickAfter = Time.unscaledTime + 0.2f;
 
-            _world.SetStatus("Aim at a placed object and left-click. A blue frame marks the selected object.");
+            _world.SetStatus("LMB: select a prop. Shift + LMB: select several props. E: carry a nearby prop.");
         }
 
         private void CreateGhost()
@@ -477,6 +482,7 @@ namespace NullServers.Sandbox
             if (!_ghost) return;
 
             _ghost.name = "BuildGhost";
+            new PropEffects(_ghost).Apply(false);
             _ghostBaseScale = _ghost.transform.localScale;
             _ghostMaterial = new Material(Shader.Find("Sprites/Default") ?? Shader.Find("Unlit/Transparent"));
             _ghostMaterial.color = new Color(0.2f, 0.85f, 1f, 0.35f);
@@ -486,19 +492,18 @@ namespace NullServers.Sandbox
                 node.gameObject.layer = 2;
             }
 
-            foreach (Renderer renderer in _ghost.GetComponentsInChildren<Renderer>())
+            _ghostRenderers = _ghost.GetComponentsInChildren<Renderer>().ToArray();
+            foreach (Renderer renderer in _ghostRenderers)
             {
-                renderer.sharedMaterials = 
-                    new Il2CppInterop.Runtime.InteropTypes.Arrays.Il2CppReferenceArray<Material>(
+                renderer.sharedMaterials = new Il2CppInterop.Runtime.InteropTypes.Arrays.Il2CppReferenceArray<Material>(
                     Enumerable.Repeat(_ghostMaterial, Math.Max(1, renderer.sharedMaterials.Length)).ToArray());
                 renderer.shadowCastingMode = ShadowCastingMode.Off;
             }
 
             _clickAfter = Time.unscaledTime + 0.2f;
-
         }
 
-        internal void Change(Point3 scale, Rotation4 rotation, string color, string texture, bool dynamic)
+        internal void Change(Point3 scale, Rotation4 rotation, string color, string texture, bool dynamic, bool effects = true)
         {
             if (_draft == null) return;
 
@@ -508,7 +513,8 @@ namespace NullServers.Sandbox
                 Rotation = rotation,
                 Color = color,
                 Texture = texture,
-                Dynamic = dynamic
+                Dynamic = dynamic,
+                Effects = effects
             };
 
             if (draft.Valid)
@@ -530,27 +536,100 @@ namespace NullServers.Sandbox
 
         internal void Confirm()
         {
-            if (!_ghost || !_hasSurface && !_editing) return;
+            if (_editing && _draft != null)
+            {
+                BuildingObject original = State(_draft.Id);
+                if (original == null) { Stop(); return; }
+                Vector3 offset = SandboxWorld.Vector(_draft.Position) - SandboxWorld.Vector(original.Position);
+                ApplySelected(item => item with
+                {
+                    Position = SandboxWorld.Point(SandboxWorld.Vector(item.Position) + offset),
+                    Rotation = _draft.Rotation == original.Rotation ? item.Rotation : _draft.Rotation,
+                    Scale = _draft.Scale == original.Scale ? item.Scale : _draft.Scale,
+                    Color = _draft.Color == original.Color ? item.Color : _draft.Color,
+                    Texture = _draft.Texture == original.Texture ? item.Texture : _draft.Texture,
+                    Dynamic = _draft.Dynamic == original.Dynamic ? item.Dynamic : _draft.Dynamic,
+                    Effects = _draft.Effects == original.Effects ? item.Effects : _draft.Effects
+                });
+                return;
+            }
+
+            if (!_ghost || !_hasSurface) return;
 
             _world.Submit(_world.Message(_editing ? SandboxKind.Edit : SandboxKind.Create) with
             {
                 Object = _draft
             });
 
-            if (_editing) Stop();
+            if (_editing)
+            {
+                Stop();
+            }
         }
 
         internal void DeleteSelected()
         {
-            if (_editing && _draft != null)
+            BuildingObject[] items = _selection.Select(State).Where(item => item != null).ToArray();
+            if (items.Length > 0)
             {
-                _world.Submit(_world.Message(SandboxKind.Delete) with
-                {
-                    Id = _draft.Id
-                });
+                _world.Submit(_world.Message(SandboxKind.BatchDelete) with { Objects = items });
             }
 
             Stop();
+        }
+
+        internal void ApplySelected(Func<BuildingObject, BuildingObject> change)
+        {
+            BuildingObject[] items = _selection.Select(State).Where(item => item != null).Select(change).ToArray();
+            if (items.Length is < 1 or > 32 || items.Any(item => !item.Valid))
+            {
+                _world.SetStatus("Check the selected objects and numeric values.");
+                return;
+            }
+
+            _world.Submit(_world.Message(SandboxKind.BatchEdit) with { Objects = items });
+        }
+
+        internal string RequestBatch(int sender, SandboxMessage message)
+        {
+            if (!_world.ConsoleEnabled && !_world.Administrator(sender)) return "The host must enable the sandbox console first.";
+
+            BuildingObject[] items = message.Objects;
+            if (items is not { Length: > 0 and <= 32 } || items.Select(item => item.Id).Distinct().Count() != items.Length)
+            {
+                return "Invalid object selection.";
+            }
+
+            foreach (BuildingObject state in items)
+            {
+                BuildingObject original = State(state.Id);
+                if (!state.Valid || original == null || original.Revision != state.Revision || original.Asset != state.Asset ||
+                    !SandboxMessage.CanEdit(original.Owner, sender, _world.Administrator(sender)))
+                    return "An object changed or is not yours. Select the group again.";
+            }
+
+            var ids = items.Select(item => item.Id).ToHashSet();
+            if (message.Kind == SandboxKind.BatchEdit && _objects.Values.Count(item => item.State.Dynamic && !ids.Contains(item.State.Id)) + items.Count(item => item.Dynamic) > 64)
+            {
+                return "This room already has 64 objects with active physics.";
+            }
+
+            foreach (BuildingObject state in items.OrderBy(item => item.Dynamic))
+            {
+                if (message.Kind == SandboxKind.BatchDelete)
+                {
+                    Remove(state.Id);
+                    _world.Send(_world.Message(SandboxKind.Delete) with { Id = state.Id });
+                }
+                else
+                {
+                    BuildingObject changed = state with { Owner = State(state.Id).Owner, Revision = state.Revision + 1 };
+                    Apply(changed);
+                    _world.Send(_world.Message(SandboxKind.Object) with { Object = changed });
+                }
+            }
+
+            return null;
         }
 
         internal void Undo()
@@ -573,10 +652,7 @@ namespace NullServers.Sandbox
 
                 _undoPending = id;
                 _undoRequestedAt = Time.unscaledTime;
-                _world.Submit(_world.Message(SandboxKind.Delete) with
-                {
-                    Id = id
-                });
+                _world.Delete(id);
 
                 return;
             }
@@ -588,33 +664,21 @@ namespace NullServers.Sandbox
 
         private bool InputAllowed()
         {
-            if 
-            (
-                !_world.Gun.Equipped ||
+            if (!_world.Hands.Equipped ||
                 !_world.Active ||
                 Cursor.lockState != CursorLockMode.Locked ||
                 !_world.ConsoleEnabled &&
-                !_world.IsAdmin
-            )
+                !_world.IsAdmin)
             {
                 return false;
             }
 
-            MultiplayerChat chat = MultiplayerChat.CFNPNLGIHMH;
-            if (chat && chat.BOCAABIECMF && chat.BOCAABIECMF.isFocused)
-            {
-                return false;
-            }
-
-            GameObject selected = UnityEngine.EventSystems.EventSystem.current?.currentSelectedGameObject;
-            UnityEngine.UI.InputField input = selected ? selected.GetComponent(Il2CppType.Of<UnityEngine.UI.InputField>())?.Cast<UnityEngine.UI.InputField>() : null;
-
-            return !input || !input.isFocused;
+            return !SandboxWorld.Typing();
         }
 
         internal void HandleInput()
         {
-            if (!_world.Gun.Equipped || _inputFrame == Time.frameCount)
+            if (!_world.Hands.Equipped || _world.Hands.Holding > 0 || _inputFrame == Time.frameCount)
             {
                 return;
             }
@@ -647,7 +711,7 @@ namespace NullServers.Sandbox
                 return;
             }
 
-            if (_selecting)
+            if (_selecting || !_ghost)
             {
                 Select();
                 return;
@@ -661,18 +725,8 @@ namespace NullServers.Sandbox
 
         internal void Stop()
         {
-            if (_ghost)
-            {
-                Object.Destroy(_ghost);
-            }
-
-            if (_ghostMaterial)
-            {
-                Object.Destroy(_ghostMaterial);
-            }
-
-            _ghost = null;
-            _ghostMaterial = null;
+            DestroyPreview(ref _ghost, ref _ghostMaterial);
+            _ghostRenderers = Array.Empty<Renderer>();
 
             foreach (var item in _hiddenSelected)
             {
@@ -689,6 +743,7 @@ namespace NullServers.Sandbox
                 _outline.SetActive(false);
             }
 
+            _selection.Clear();
             _draft = null;
             _editing = false;
             _hasSurface = false;
@@ -696,18 +751,33 @@ namespace NullServers.Sandbox
             _clickAfter = Time.unscaledTime + 0.15f;
         }
 
-        private bool Surface(Ray ray, float distance, out RaycastHit hit)
+        private static void DestroyPreview(ref GameObject root, ref Material material)
         {
-            foreach (RaycastHit candidate in Physics.RaycastAll(ray, distance, ~(1 << 2), QueryTriggerInteraction.Ignore).OrderBy(value => value.distance))
+            if (root)
+            {
+                Object.Destroy(root);
+            }
+
+            if (material)
+            {
+                Object.Destroy(material);
+            }
+
+            root = null;
+            material = null;
+        }
+
+        internal bool Surface(Ray ray, float distance, out RaycastHit hit, bool characters = false)
+        {
+            foreach (RaycastHit candidate in Physics.RaycastAll(ray, distance, ~(1 << 2), characters ? QueryTriggerInteraction.Collide : QueryTriggerInteraction.Ignore).OrderBy(value => value.distance))
             {
                 Transform node = candidate.transform;
-                if 
-                (
-                    _localAvatar &&
+                if (candidate.collider.isTrigger && !node.GetComponentInParent<PlayerNetworkController>() &&
+                    !node.GetComponentInParent<Bot>() && !node.GetComponentInParent<BossBot>()) continue;
+                if (_localAvatar &&
                     (node == _localAvatar || node.IsChildOf(_localAvatar)) ||
                     _localController &&
-                    (node == _localController || node.IsChildOf(_localController))
-                )
+                    (node == _localController || node.IsChildOf(_localController)))
                 {
                     continue;
                 }
@@ -734,21 +804,10 @@ namespace NullServers.Sandbox
 
                 for (int index = 0; index < _outlineEdges.Length; index++)
                 {
-                    GameObject edge = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                    Transform edge = SandboxAssets.CreateSegment(_outline.transform, _outlineMaterial);
                     edge.name = "SelectionEdge";
-                    edge.layer = 2;
-                    edge.transform.SetParent(_outline.transform, false);
-
-                    Collider collider = edge.GetComponent<Collider>();
-                    collider.enabled = false;
-
-                    Object.Destroy(collider);
-
-                    Renderer renderer = edge.GetComponent<Renderer>();
-                    renderer.sharedMaterial = _outlineMaterial;
-                    renderer.shadowCastingMode = ShadowCastingMode.Off;
-                    renderer.receiveShadows = false;
-                    _outlineEdges[index] = edge.transform;
+                    edge.gameObject.layer = 2;
+                    _outlineEdges[index] = edge;
                 }
             }
 
@@ -771,44 +830,12 @@ namespace NullServers.Sandbox
                 new Vector3(a.x, b.y, b.z)
             ];
 
-            int[] order =
-            [
-                0,
-                1,
-                1,
-                2,
-                2,
-                3,
-                3,
-                0,
-                4,
-                5,
-                5,
-                6,
-                6,
-                7,
-                7,
-                4,
-                0,
-                4,
-                1,
-                5,
-                2,
-                6,
-                3,
-                7
-            ];
-
             for (int index = 0; index < _outlineEdges.Length; index++)
             {
-                Vector3 from = corners[order[index * 2]];
-                Vector3 to = corners[order[index * 2 + 1]];
+                Vector3 from = corners[EdgeOrder[index * 2]];
+                Vector3 to = corners[EdgeOrder[index * 2 + 1]];
 
-                _outlineEdges[index].SetPositionAndRotation
-                (
-                    (from + to) * 0.5f,
-                    Quaternion.FromToRotation(Vector3.up, to - from)
-                );
+                _outlineEdges[index].SetPositionAndRotation((from + to) * 0.5f, Quaternion.FromToRotation(Vector3.up, to - from));
 
                 _outlineEdges[index].localScale = new Vector3(width, (to - from).magnitude, width);
             }
@@ -820,7 +847,7 @@ namespace NullServers.Sandbox
             {
                 _actorCheck = Time.unscaledTime + 0.5f;
                 _localAvatar = SandboxWorld.Avatar(_world.LocalId)?.transform;
-                _localController = Object.FindObjectsOfType<FPScontroller>().FirstOrDefault()?.transform;
+                _localController = _world.LocalMovement?.transform;
             }
 
             foreach (BuildingObject state in _pending.Values.ToArray())
@@ -838,34 +865,31 @@ namespace NullServers.Sandbox
                 if (!string.IsNullOrEmpty(item.State.Texture))
                 {
                     Texture2D texture = _world.Assets.Textures.Get(item.State.Texture);
-                    if (texture)
+                    if (texture && texture != item.AppliedTexture)
                     {
                         foreach (var pair in item.Materials)
                         {
                             pair.Material.mainTexture = texture;
                         }
+
+                        item.AppliedTexture = texture;
                     }
                 }
 
                 if (!_world.IsHost && item.State.Dynamic)
                 {
-                    float amount = 1f - Mathf.Exp(-25 * Time.unscaledDeltaTime);
-                    item.Root.transform.SetPositionAndRotation
-                    (
-                        Vector3.Lerp
-                        (
-                            item.Root.transform.position,
-                            item.Position,
-                            amount
-                        ),
-                        Quaternion.Slerp(item.Root.transform.rotation, item.Rotation, amount)
-                    );
+                    if (item.Motion.Sample(_world.Physics.RenderTime, out var pose))
+                    {
+                        item.Root.transform.SetPositionAndRotation(
+                            new Vector3(pose.Position.X, pose.Position.Y, pose.Position.Z),
+                            new Quaternion(pose.Rotation.X, pose.Rotation.Y, pose.Rotation.Z, pose.Rotation.W));
+                    }
                 }
             }
 
             if (_world.IsHost && Time.unscaledTime >= _nextPhysics)
             {
-                _nextPhysics = Time.unscaledTime + 0.1f;
+                _nextPhysics = Time.unscaledTime + 0.05f;
 
                 foreach (Placed item in _objects.Values.Where(value => value.State.Dynamic && value.Root).ToArray())
                 {
@@ -897,6 +921,24 @@ namespace NullServers.Sandbox
 
             if (_selecting)
             {
+                if (_selection.Count > 0)
+                {
+                    var roots = _selection.Select(Root).Where(root => root).ToArray();
+                    if (roots.Length > 0)
+                    {
+                        Bounds group = SandboxAssets.BoundsOf(roots[0]);
+                        foreach (GameObject root in roots.Skip(1))
+                        {
+                            group.Encapsulate(SandboxAssets.BoundsOf(root));
+                        }
+
+                        Frame(group, new Color(0.15f, 0.8f, 1f));
+                    }
+
+                    HandleInput();
+                    return;
+                }
+
                 Camera view = Camera.main;
 
                 if (_outline)
@@ -906,19 +948,14 @@ namespace NullServers.Sandbox
 
                 if (view && Surface(new Ray(view.transform.position, view.transform.forward), 120f, out var hovered))
                 {
-                    Placed item = 
-                        _objects.Values.FirstOrDefault(value => value.Root &&
-                        (hovered.transform == value.Root.transform ||
-                        hovered.transform.IsChildOf(value.Root.transform)));
+                    Placed item = PlacedAt(hovered.transform);
 
                     if (item != null)
                     {
-                        Frame
-                        (
+                        Frame(
                             SandboxAssets.BoundsOf(item.Root),
                             SandboxMessage.CanEdit(item.State.Owner, _world.LocalId, _world.IsAdmin) ?
-                            new Color(0.2f, 0.85f, 1f) : new Color(1f, 0.35f, 0.25f)
-                        );
+                            new Color(0.2f, 0.85f, 1f) : new Color(1f, 0.35f, 0.25f));
                     }
                 }
 
@@ -944,16 +981,15 @@ namespace NullServers.Sandbox
 
             bool inWorld = Cursor.lockState == CursorLockMode.Locked;
             _hasSurface = _editing;
+
             if (!_editing && inWorld)
             {
                 PositionPreview(camera);
             }
 
-            _ghost.transform.SetPositionAndRotation
-            (
+            _ghost.transform.SetPositionAndRotation(
                 SandboxWorld.Vector(_draft.Position),
-                SandboxWorld.Quaternion(_draft.Rotation)
-            );
+                SandboxWorld.Quaternion(_draft.Rotation));
             _ghost.transform.localScale = Vector3.Scale(_ghostBaseScale, SandboxWorld.Vector(_draft.Scale));
 
             Bounds previewBounds = SandboxAssets.BoundsOf(_ghost);
@@ -962,9 +998,12 @@ namespace NullServers.Sandbox
                 _hasSurface = false;
             }
 
-            foreach (Renderer renderer in _ghost.GetComponentsInChildren<Renderer>())
+            foreach (Renderer renderer in _ghostRenderers)
             {
-                renderer.enabled = _hasSurface || _editing;
+                if (renderer)
+                {
+                    renderer.enabled = _hasSurface || _editing;
+                }
             }
 
             if (_editing)
@@ -988,8 +1027,8 @@ namespace NullServers.Sandbox
 
             if (Input.GetKeyDown(KeyCode.Q) || Input.GetKeyDown(KeyCode.E))
             {
-                Vector3 axis = Input.GetKey(KeyCode.LeftAlt) ? 
-                    Vector3.forward : 
+                Vector3 axis = Input.GetKey(KeyCode.LeftAlt) ?
+                    Vector3.forward :
                     Input.GetKey(KeyCode.LeftShift) ? Vector3.right : Vector3.up;
 
                 _draft = _draft with
@@ -1017,25 +1056,26 @@ namespace NullServers.Sandbox
             Bounds bounds = SandboxAssets.BoundsOf(_ghost);
             Vector3 normal = hit.normal;
             Vector3 point = hit.point;
+
             if (normal.y > 0.55f)
             {
                 Vector3 origin = _localController ? _localController.position : camera.transform.position;
                 Vector3 forward = Vector3.ProjectOnPlane(camera.transform.forward, Vector3.up).normalized;
+
                 if (forward.sqrMagnitude < 0.01f)
                 {
                     forward = Vector3.ProjectOnPlane(camera.transform.up, Vector3.up).normalized;
                 }
 
-                float clearance = Mathf.Max
-                (
+                float clearance = Mathf.Max(
                     2f,
-                    Mathf.Abs(forward.x) * bounds.extents.x + Mathf.Abs(forward.z) * bounds.extents.z + 0.8f
-                );
+                    Mathf.Abs(forward.x) * bounds.extents.x + Mathf.Abs(forward.z) * bounds.extents.z + 0.8f);
 
                 if (Vector3.ProjectOnPlane(point - origin, Vector3.up).magnitude < clearance)
                 {
                     Vector3 ahead = origin + forward * clearance;
                     ahead.y = point.y + 2f;
+
                     if (!Surface(new Ray(ahead, Vector3.down), 5f, out var floor) || floor.normal.y <= 0.55f)
                     {
                         return;
@@ -1057,17 +1097,14 @@ namespace NullServers.Sandbox
             _hasSurface = !SandboxAssets.BoundsOf(_ghost).Contains(camera.transform.position);
         }
 
-        internal void Pose(PhysicsPose pose, int sequence)
+        internal void Pose(PhysicsPose pose, int sequence, double stamp)
         {
-            if 
-            (
-                !_objects.TryGetValue(pose.Id, out var item) || 
-                !item.State.Dynamic || 
-                sequence <= item.Sequence
-            )
+            if (!_objects.TryGetValue(pose.Id, out var item) || !item.State.Dynamic || sequence <= item.Sequence)
             {
                 return;
             }
+
+            if (!item.Motion.Add(stamp, sequence, pose.Position, pose.Rotation)) return;
 
             item.Sequence = sequence;
             item.Position = SandboxWorld.Vector(pose.Position);
@@ -1076,22 +1113,18 @@ namespace NullServers.Sandbox
 
         internal void Pose(SandboxMessage message)
         {
-            if 
-            (
-                !_objects.TryGetValue(message.Id, out var item) ||
+            if (!_objects.TryGetValue(message.Id, out var item) ||
                 !item.State.Dynamic ||
                 message.Sequence <= item.Sequence ||
                 !SandboxPose.TryDecode(message.Data, out var offset, out var values) ||
                 offset != 0 ||
-                values.Length != 7
-            )
+                values.Length != 7)
             {
                 return;
             }
 
-            item.Sequence = message.Sequence;
-            item.Position = new Vector3(values[0], values[1], values[2]);
-            item.Rotation = new Quaternion(values[3], values[4], values[5], values[6]);
+            Pose(new PhysicsPose(message.Id, 255, new Point3(values[0], values[1], values[2]),
+                new Rotation4(values[3], values[4], values[5], values[6])), message.Sequence, _world.Physics.Timestamp(message));
         }
     }
 }

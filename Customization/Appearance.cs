@@ -1,19 +1,20 @@
-using NullServers.Room;
+﻿using NullServers.Room;
 
 namespace NullServers.Customization
 {
-    internal sealed record Appearance
-    (
+    internal sealed record Appearance(
         int Hat,
         string FurColor,
         bool UseSkin,
         string HeadUrl,
         string BodyUrl,
         string ArmsUrl,
-        string LegsUrl
-    )
+        string LegsUrl,
+        int[] ExtraHats = null)
     {
         internal const int UrlLimit = 512;
+
+        internal int[] Hats => new[] { Hat }.Concat(ExtraHats ?? Array.Empty<int>()).Where(hat => hat >= 0).Distinct().ToArray();
 
         internal string[] Urls =>
         [
@@ -27,9 +28,9 @@ namespace NullServers.Customization
 
         internal bool SameLook(Appearance other)
         {
-            return 
-                other != null &&
+            return other != null &&
                 Hat == other.Hat &&
+                (ExtraHats ?? Array.Empty<int>()).SequenceEqual(other.ExtraHats ?? Array.Empty<int>()) &&
                 FurColor == other.FurColor &&
                 UseSkin == other.UseSkin &&
                 (!UseSkin ||
@@ -43,7 +44,11 @@ namespace NullServers.Customization
         {
             error = "Choose an available hat and a valid fur color.";
 
-            if (Hat < 0 || Hat >= hatCount || !RoomOptions.IsValidColor(FurColor))
+            if (Hat < 0 || Hat >= hatCount || !RoomOptions.IsValidColor(FurColor) ||
+                ExtraHats != null &&
+                (ExtraHats.Length != Network.HatEntry.ExtraSlots ||
+                ExtraHats.Any(hat => hat < -1 || hat == 0 || hat >= hatCount) ||
+                new[] { Hat }.Concat(ExtraHats).Where(hat => hat > 0).GroupBy(hat => hat).Any(group => group.Count() > 1)))
             {
                 return false;
             }
@@ -62,8 +67,7 @@ namespace NullServers.Customization
 
         internal static bool ValidUrl(string url)
         {
-            return 
-                string.IsNullOrEmpty(url) ||
+            return string.IsNullOrEmpty(url) ||
                 (url.Length <= UrlLimit &&
                 !url.Any(character => char.IsWhiteSpace(character) || char.IsControl(character) || character == '|') &&
                 Uri.TryCreate(url, UriKind.Absolute, out var uri) &&

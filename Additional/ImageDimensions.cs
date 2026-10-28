@@ -6,9 +6,7 @@ namespace NullServers.Additional
     {
         internal static bool Allowed(ReadOnlySpan<byte> data, int maximum = 2048)
         {
-            if 
-            (
-                data.Length >= 24 &&
+            if (data.Length >= 24 &&
                 data[..8].SequenceEqual
                 (new byte[]
                 {
@@ -22,24 +20,12 @@ namespace NullServers.Additional
                         10
                         }
                 ) &&
-                data.Slice(12, 4).SequenceEqual
-                (
-                    new byte[]
-                    {
-                        73,
-                        72,
-                        68,
-                        82
-                    }
-                )
-            )
+                data.Slice(12, 4).SequenceEqual(new byte[] { 73, 72, 68, 82 }))
             {
-                return Fits
-                (
+                return Fits(
                     BinaryPrimitives.ReadUInt32BigEndian(data.Slice(16, 4)),
                     BinaryPrimitives.ReadUInt32BigEndian(data.Slice(20, 4)),
-                    maximum
-                );
+                    maximum);
             }
 
             if (data.Length < 4 || data[0] != 0xff || data[1] != 0xd8) return false;
@@ -75,14 +61,11 @@ namespace NullServers.Additional
 
                 if (marker is >= 0xc0 and <= 0xcf && marker is not (0xc4 or 0xc8 or 0xcc))
                 {
-                    return 
-                        length >= 8 &&
-                        Fits
-                        (
+                    return length >= 8 &&
+                        Fits(
                             BinaryPrimitives.ReadUInt16BigEndian(data.Slice(offset + 5, 2)),
                             BinaryPrimitives.ReadUInt16BigEndian(data.Slice(offset + 3, 2)),
-                            maximum
-                        );
+                            maximum);
                 }
 
                 offset += length;

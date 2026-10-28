@@ -24,8 +24,7 @@ namespace NullServers.Server
 
         private static bool BeforeConsoleStart(Volume __instance)
         {
-            return 
-                !(_instance._placingConsole || (_instance._console && __instance.NetworkObject == _instance._console)) ||
+            return !(_instance._placingConsole || (_instance._console && __instance.NetworkObject == _instance._console)) ||
                 !_instance._control.CanManage ||
                 RoomProperties.Current.GameMode == "SBX";
         }
@@ -34,14 +33,13 @@ namespace NullServers.Server
         {
             error = "Only the host can spawn the sandbox console.";
 
-            RoomMultiplayerMenu menu = RoomMultiplayerMenu.GJDGDIGECJN;
-            if (!_control.CanManage || _control.Busy || !menu || !menu.CJNLEDLNGID)
+            RoomMultiplayerMenu menu = RoomMultiplayerMenu.Current;
+            if (!_control.CanManage || _control.Busy || !menu || !menu.IsInitialized)
             {
                 return false;
             }
 
-            NetworkObject existing = 
-                UnityEngine.Object.FindObjectsOfType<NetworkObject>()
+            NetworkObject existing = UnityEngine.Object.FindObjectsOfType<NetworkObject>()
                 .FirstOrDefault(networkObject => networkObject.IsServerInitialized &&
                 networkObject.gameObject.scene == menu.gameObject.scene &&
                 networkObject.name.StartsWith("Wemon", StringComparison.Ordinal));
@@ -49,7 +47,6 @@ namespace NullServers.Server
             if (existing)
             {
                 error = "The sandbox console is already present on this map.";
-
                 return false;
             }
 
@@ -57,9 +54,8 @@ namespace NullServers.Server
 
             try
             {
-                _console = CPPBDGGKHCB.FONDGACBGAB("Wemon", menu.transform.position, menu.transform.rotation, null);
+                _console = NetworkSpawner.Spawn("Wemon", menu.transform.position, menu.transform.rotation, null);
                 error = _console ? null : "The sandbox console could not be spawned.";
-
                 return _console;
             }
             finally

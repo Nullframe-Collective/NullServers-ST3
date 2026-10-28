@@ -1,8 +1,10 @@
-using HarmonyLib;
+﻿using HarmonyLib;
 using Il2Cpp;
 using Il2CppFishNet.Connection;
+using Il2CppFishNet.Managing;
 using Il2CppFishNet.Transporting;
 using Il2CppInterop.Runtime;
+using NullServers.Additional;
 using NullServers.Network;
 using NullServers.Players;
 using NullServers.Server;
@@ -32,19 +34,29 @@ namespace NullServers.Sandbox
         private float _helloAt;
         private float _scanAt;
         private Vector3 _launch;
+        private float _movementGravity;
+
+        private static readonly Dictionary<int, PlayerNetworkController> Avatars = new();
+        private static int _avatarFrame = -1;
+        private Volume[] _volumes = Array.Empty<Volume>();
+        private int _volumeFrame = -1;
 
         internal SandboxAssets Assets { get; } = new();
         internal SandboxBuilding Building { get; }
         internal RagdollSync Ragdolls { get; }
         internal PhysicsReplication Physics { get; }
-        internal PhysGun Gun { get; }
+        internal Hands Hands { get; }
+        internal LivingRagdolls Living { get; }
+        internal Room.EnvironmentSettings Environment => _control.Access.Environment;
+        internal bool SetEnvironment(Room.EnvironmentSettings settings, out string error) => _control.Access.SetEnvironment(settings, out error);
 
-        internal bool Active => 
+        internal bool Active =>
             _session.IsNullFrame &&
             !_session.IsSwitching &&
             _control.Room != null &&
             _menu &&
-            _menu.CJNLEDLNGID;
+            _menu.IsInitialized &&
+            _control.Compatibility.Ready;
 
         internal bool IsHost => _control.CanManage;
         internal bool IsAdmin => _control.Access.CanOpen;
@@ -55,10 +67,23 @@ namespace NullServers.Sandbox
 
         internal IReadOnlyList<RoomPlayer> Players => _control.Access.Players;
 
-        internal bool ConsoleEnabled => 
-            Active &&
-            Object.FindObjectsOfType<Volume>().Any(volume =>
-            volume.IsClientInitialized && volume.APJODFNHLED?.Value == 1);
+        internal Volume[] Volumes
+        {
+            get
+            {
+                if (_volumeFrame != Time.frameCount)
+                {
+                    _volumeFrame = Time.frameCount;
+                    _volumes = Object.FindObjectsOfType<Volume>().ToArray();
+                }
+
+                return _volumes;
+            }
+        }
+
+        internal bool ConsoleEnabled => Active && Volumes.Any(volume => volume && volume.IsClientInitialized && volume.ConsoleState?.Value == 1);
+
+        internal FPScontroller LocalMovement => _movement ? _movement : null;
 
         internal SandboxWorld(HarmonyLib.Harmony harmony, ServerControl control, PlayerProfiles profiles, RelaySession session)
         {
@@ -70,7 +95,8 @@ namespace NullServers.Sandbox
             Building = new SandboxBuilding(this);
             Ragdolls = new RagdollSync(harmony, this);
             Physics = new PhysicsReplication(this);
-            Gun = new PhysGun(this);
+            Living = new LivingRagdolls(this);
+            Hands = new Hands(this);
 
             profiles.SandboxReceived += ReceiveRequest;
             profiles.SandboxReceivedFromHost += Receive;
@@ -81,14 +107,18 @@ namespace NullServers.Sandbox
 
             harmony.Patch(
                 AccessTools.Method(typeof(FPScontroller), nameof(FPScontroller.FixedUpdate)),
-                prefix: new HarmonyMethod(typeof(SandboxWorld), nameof(BeforeMovement)));
+                prefix: new HarmonyMethod(typeof(SandboxWorld), nameof(BeforeFixedMovement)));
+
+            harmony.Patch(
+                AccessTools.Method(typeof(FPSMouseLook), nameof(FPSMouseLook.Update)),
+                prefix: new HarmonyMethod(typeof(SandboxWorld), nameof(BeforeLook)));
 
             harmony.Patch(
                 AccessTools.Method(typeof(PlayerDamage), nameof(PlayerDamage.KDDDGBFEFOC)),
                 prefix: new HarmonyMethod(typeof(SandboxWorld), nameof(BeforeDamage)));
         }
 
-        internal SandboxMessage Message(SandboxKind kind) => new(1, _room, _menu.NetworkObject.ObjectId, Epoch ?? "", kind);
+        internal SandboxMessage Message(SandboxKind kind) => new(2, _room, _menu.NetworkObject.ObjectId, Epoch ?? "", kind);
         internal PlayerEffects Effects(int id) => _effects.GetValueOrDefault(id) ?? new PlayerEffects(id);
         internal bool Administrator(int id) => _control.Access.IsAdministrator(id);
         internal void SetStatus(string value) => Status = value;
@@ -124,26 +154,26 @@ namespace NullServers.Sandbox
 
             if (target != null)
             {
-                if (target.ClientId != LocalId)
-                {
-                    _profiles.SendSandbox(message, target, channel: unreliable ? Channel.Unreliable : Channel.Reliable);
-                }
-
+                SendTo(target, SandboxMessage.Serialize(message), unreliable);
                 return;
             }
 
             foreach (NetworkConnection connection in _control.Connections())
             {
-                if 
-                (
-                    connection.ClientId != LocalId &&
+                if (connection.ClientId != LocalId &&
                     connection.IsAuthenticated &&
-                    _peers.GetValueOrDefault(connection.ClientId) == connection.Pointer
-                )
+                    _peers.GetValueOrDefault(connection.ClientId) == connection.Pointer)
                 {
                     _profiles.SendSandbox(message, connection, channel: unreliable ? Channel.Unreliable : Channel.Reliable);
                 }
             }
+        }
+
+        internal void SendTo(NetworkConnection target, string json, bool unreliable = false)
+        {
+            if (!Active || !IsHost || target.ClientId == LocalId) return;
+
+            _profiles.SendSandboxJson(json, target, channel: unreliable ? Channel.Unreliable : Channel.Reliable);
         }
 
         internal void Queue(SandboxMessage message, NetworkConnection connection) => _outgoing.Enqueue((connection, message));
@@ -161,7 +191,7 @@ namespace NullServers.Sandbox
 
             if (IsHost)
             {
-                Gun.Aim(LocalId, message.Gun);
+                Hands.Aim(LocalId, message.Carry);
             }
             else
             {
@@ -171,25 +201,32 @@ namespace NullServers.Sandbox
 
         private void ReceiveRequest(NetworkConnection connection, SandboxMessage message)
         {
-            if 
-            (
-                !Active ||
+            if (!Active ||
                 !IsHost ||
                 !connection.IsValid ||
                 !connection.IsAuthenticated ||
                 message.Room != _room ||
-                message.RoomObject != _menu.NetworkObject.ObjectId
-            )
+                message.RoomObject != _menu.NetworkObject.ObjectId)
             {
                 return;
             }
 
             float now = Time.unscaledTime;
-            if (message.Kind == SandboxKind.GunAim)
+            if (message.Kind == SandboxKind.CarryAim)
             {
                 if (message.Epoch == Epoch && _peers.GetValueOrDefault(connection.ClientId) == connection.Pointer)
                 {
-                    Gun.Aim(connection.ClientId, message.Gun);
+                    Hands.Aim(connection.ClientId, message.Carry);
+                }
+
+                return;
+            }
+
+            if (message.Kind == SandboxKind.Escape)
+            {
+                if (message.Epoch == Epoch && _peers.GetValueOrDefault(connection.ClientId) == connection.Pointer)
+                {
+                    Living.Escape(connection.ClientId);
                 }
 
                 return;
@@ -211,7 +248,7 @@ namespace NullServers.Sandbox
                     return;
                 }
 
-                Gun.Disconnect(connection.ClientId);
+                Hands.Disconnect(connection.ClientId);
                 Physics.Disconnect(connection.ClientId);
 
                 _snapshotBudgets.Remove(connection.ClientId);
@@ -236,7 +273,8 @@ namespace NullServers.Sandbox
                 }
 
                 Ragdolls.Snapshot(connection);
-                Gun.Snapshot(connection);
+                Living.Snapshot(connection);
+                Hands.Snapshot(connection);
 
                 return;
             }
@@ -253,13 +291,25 @@ namespace NullServers.Sandbox
         {
             string error;
 
-            if (message.Kind == SandboxKind.Admin)
+            if (message.Kind == SandboxKind.Flight)
+            {
+                error = "The flight shortcut has been removed.";
+            }
+            else if (message.Kind == SandboxKind.Admin)
             {
                 error = Administrator(sender) ? Execute(sender, message.Command) : "Only the host and trusted administrators can use Advanced.";
             }
-            else if (message.Kind is SandboxKind.GunState or SandboxKind.GunGrab or SandboxKind.GunRelease)
+            else if (message.Kind == SandboxKind.Escape)
             {
-                error = Gun.Request(sender, message);
+                error = Living.Escape(sender);
+            }
+            else if (message.Kind is SandboxKind.BatchEdit or SandboxKind.BatchDelete)
+            {
+                error = Building.RequestBatch(sender, message);
+            }
+            else if (message.Kind is SandboxKind.CarryState or SandboxKind.CarryGrab or SandboxKind.CarryRelease)
+            {
+                error = Hands.Request(sender, message);
             }
             else
             {
@@ -294,7 +344,8 @@ namespace NullServers.Sandbox
             {
                 if (Epoch != message.Epoch)
                 {
-                    Gun.Clear();
+                    Hands.Clear();
+                    Living.Clear();
                     Building.Clear();
                     Ragdolls.Clear();
                     Physics.Clear();
@@ -350,20 +401,20 @@ namespace NullServers.Sandbox
                 case SandboxKind.PoseBatch:
                     Physics.Receive(message);
                     break;
-                case SandboxKind.GunState:
-                    Gun.Apply(message.Gun);
+                case SandboxKind.Living:
+                    Living.Apply(message.Living);
+                    break;
+                case SandboxKind.CarryState:
+                    Hands.Apply(message.Carry);
                     break;
             }
         }
 
         private string Execute(int sender, SandboxCommand command)
         {
-            if 
-            (
-                command == null ||
+            if (command == null ||
                 !_control.Manager.ServerManager.Clients.TryGetValue(command.Target, out var target) ||
-                !target.IsAuthenticated
-            )
+                !target.IsAuthenticated)
             {
                 return "This player has left the room.";
             }
@@ -427,7 +478,7 @@ namespace NullServers.Sandbox
                     return null;
                 case PlayerCommand.Kill:
                 case PlayerCommand.Heal:
-                    PlayerDamage damage = avatar ? avatar.FJEJDPCPOJC : null;
+                    PlayerDamage damage = avatar ? avatar.Damage : null;
                     if (!damage)
                     {
                         return "This player does not have a living character.";
@@ -445,11 +496,11 @@ namespace NullServers.Sandbox
                             Effects = _effects[command.Target]
                         });
 
-                        damage.LAKFCNKPBPM(100000f, null);
+                        damage.TakeDamage(100000f, null);
                     }
                     else
                     {
-                        damage.LAKFCNKPBPM((float)damage.PIIDNIGPCDK - 100f, null);
+                        damage.TakeDamage(damage.Health - 100f, null);
                     }
 
                     return null;
@@ -457,18 +508,19 @@ namespace NullServers.Sandbox
                 case PlayerCommand.Respawn:
                     if (avatar && avatar.IsServerInitialized && avatar.NetworkObject)
                     {
-                        CPPBDGGKHCB.OAFNAAMPNHG(avatar.gameObject);
+                        NetworkSpawner.Despawn(avatar.gameObject);
                     }
 
                     if (command.Action == PlayerCommand.Remove)
                     {
                         PlayerInfo player = Object.FindObjectsOfType<PlayerInfo>().FirstOrDefault(value => value.IsServerInitialized &&
-                            value.COJDPMKCLCM == command.Target);
+                            value.ClientId == command.Target);
                         if (player)
                         {
-                            player.EIDHGMOHFPI("Spectators");
+                            player.SetTeam("Spectators");
                         }
                     }
+
                     CommandTo(target, command);
                     return null;
                 case PlayerCommand.Bring:
@@ -481,16 +533,12 @@ namespace NullServers.Sandbox
 
                     Transform destination = command.Action == PlayerCommand.Bring ? source.transform : avatar.transform;
                     NetworkConnection receiver = command.Action == PlayerCommand.Bring ? target : _control.Manager.ServerManager.Clients[sender];
-                    CommandTo
-                    (
+                    CommandTo(
                         receiver,
-                        new SandboxCommand
-                        (
+                        new SandboxCommand(
                             PlayerCommand.Bring,
                             receiver.ClientId,
-                            Position: Point(destination.position + destination.forward * 2f + Vector3.up)
-                        )
-                    );
+                            Position: Point(destination.position + destination.forward * 2f + Vector3.up)));
                     return null;
                 case PlayerCommand.Launch:
                     CommandTo(target, command);
@@ -539,7 +587,7 @@ namespace NullServers.Sandbox
                     _menu.SpawnPlayer("Spectators");
                     break;
                 case PlayerCommand.Respawn:
-                    string team = PlayerInfo.KEBDMAALEDI?.NDAEOCECHBM;
+                    string team = PlayerInfo.Local?.Team;
                     if (string.IsNullOrEmpty(team) || team == "Spectators")
                     {
                         team = "";
@@ -550,8 +598,9 @@ namespace NullServers.Sandbox
                 case PlayerCommand.Bring:
                     if (_movement && command.Position != null)
                     {
-                        CharacterController controller = _movement.PJJBJAPJODD;
+                        CharacterController controller = _movement.Controller;
                         bool enabled = controller && controller.enabled;
+
                         if (controller)
                         {
                             controller.enabled = false;
@@ -563,6 +612,7 @@ namespace NullServers.Sandbox
                             controller.enabled = enabled;
                         }
                     }
+
                     break;
                 case PlayerCommand.Launch:
                     _launch = Vector3.up * 16f;
@@ -570,10 +620,35 @@ namespace NullServers.Sandbox
             }
         }
 
+        internal void Delete(int id) => Submit(Message(SandboxKind.Delete) with
+        {
+            Id = id
+        });
+
         internal static PlayerNetworkController Avatar(int id)
         {
-            return Object.FindObjectsOfType<PlayerNetworkController>()
-            .FirstOrDefault(player => player.IsClientInitialized && player.OwnerId == id && player.gameObject.activeInHierarchy);
+            if (_avatarFrame != Time.frameCount)
+            {
+                _avatarFrame = Time.frameCount;
+                Avatars.Clear();
+
+                foreach (PlayerNetworkController player in Object.FindObjectsOfType<PlayerNetworkController>())
+                {
+                    if (player.IsClientInitialized && player.gameObject.activeInHierarchy)
+                    {
+                        Avatars.TryAdd(player.OwnerId, player);
+                    }
+                }
+            }
+
+            return Avatars.TryGetValue(id, out var avatar) && avatar ? avatar : null;
+        }
+
+        internal static GameObject Spawned(int objectId)
+        {
+            NetworkManager manager = NetBootstrap.Current ? NetBootstrap.Current.Network : null;
+            return manager && manager.ClientManager.Objects.Spawned.TryGetValue(objectId, out var value) &&
+                value && value.IsClientInitialized ? value.gameObject : null;
         }
 
         internal static Point3 Point(Vector3 value) => new(value.x, value.y, value.z);
@@ -583,8 +658,9 @@ namespace NullServers.Sandbox
 
         internal void Update()
         {
-            RoomMultiplayerMenu menu = RoomMultiplayerMenu.GJDGDIGECJN;
+            RoomMultiplayerMenu menu = RoomMultiplayerMenu.Current;
             string room = _session.IsNullFrame && !_session.IsSwitching ? _control.Room?.Id : null;
+
             if (menu != _menu || room != _room)
             {
                 RestoreMovement();
@@ -602,7 +678,8 @@ namespace NullServers.Sandbox
                 _requests.Clear();
                 _outgoing.Clear();
                 _snapshotBudgets.Clear();
-                Gun.Clear();
+                Hands.Clear();
+                Living.Clear();
                 Building.Clear();
                 Ragdolls.Clear();
                 Physics.Clear();
@@ -633,14 +710,9 @@ namespace NullServers.Sandbox
             {
                 for (int index = 0; index < 4 && _outgoing.TryPeek(out var item); index++)
                 {
-                    if 
-                    (
-                        !item.Connection.IsValid ||
-                        _peers.GetValueOrDefault(item.Connection.ClientId) != item.Connection.Pointer
-                    )
+                    if (!item.Connection.IsValid || _peers.GetValueOrDefault(item.Connection.ClientId) != item.Connection.Pointer)
                     {
                         _outgoing.Dequeue();
-
                         continue;
                     }
 
@@ -651,7 +723,6 @@ namespace NullServers.Sandbox
                         if (current == null)
                         {
                             _outgoing.Dequeue();
-
                             continue;
                         }
 
@@ -664,7 +735,6 @@ namespace NullServers.Sandbox
                     if (snapshot.Kind == SandboxKind.Ragdoll && !Ragdolls.Contains(snapshot.Ragdoll.Id))
                     {
                         _outgoing.Dequeue();
-
                         continue;
                     }
 
@@ -673,28 +743,24 @@ namespace NullServers.Sandbox
                         _snapshotBudgets[item.Connection.ClientId] = budget = new TrafficBudget(16384, SandboxMessage.MaxBytes + 64);
                     }
 
-                    int bytes = System.Text.Encoding.UTF8.GetByteCount(System.Text.Json.JsonSerializer.Serialize(snapshot, SandboxMessage.JsonOptions)) + 32;
-                    if (!budget.Spend(bytes, Time.unscaledTime))
+                    string json = SandboxMessage.Serialize(snapshot);
+                    if (!budget.Spend(System.Text.Encoding.UTF8.GetByteCount(json) + 32, Time.unscaledTime))
                     {
                         break;
                     }
 
                     _outgoing.Dequeue();
-                    Send(snapshot, item.Connection);
+                    SendTo(item.Connection, json);
                 }
 
                 foreach (int id in _peers.Keys.ToArray())
                 {
-                    if 
-                    (
-                        !_control.Manager.ServerManager.Clients.TryGetValue(id, out var peer) ||
-                        peer.Pointer != _peers[id]
-                    )
+                    if (!_control.Manager.ServerManager.Clients.TryGetValue(id, out var peer) || peer.Pointer != _peers[id])
                     {
                         _peers.Remove(id);
                         _requests.Remove(id);
                         _snapshotBudgets.Remove(id);
-                        Gun.Disconnect(id);
+                        Hands.Disconnect(id);
 
                         if (_effects.Remove(id))
                         {
@@ -737,18 +803,20 @@ namespace NullServers.Sandbox
                     if (movement)
                     {
                         _movementScale = movement.transform.localScale;
-                        _controllerEnabled = movement.PJJBJAPJODD && movement.PJJBJAPJODD.enabled;
+                        _movementGravity = movement.Movement?.gravity ?? 20f;
+                        _controllerEnabled = movement.Controller && movement.Controller.enabled;
                     }
                 }
 
-                Assets.Capture();
+                Assets.Capture(Volumes);
             }
 
             MoveLocal();
             Assets.Update();
             Building.Update();
             Ragdolls.Update();
-            Gun.Update();
+            Living.Update();
+            Hands.Update();
             Physics.Update();
         }
 
@@ -756,36 +824,54 @@ namespace NullServers.Sandbox
         {
             if (!_movement) return;
 
+            if (_movement.Movement != null)
+            {
+                _movement.Movement.gravity = Environment.World == null ? _movementGravity : _movementGravity * (-Environment.World.Gravity.Y / 9.81f);
+            }
+
+            if (_launch.sqrMagnitude > 0.01f && _movement.Movement != null)
+            {
+                Vector3 velocity = _movement.Movement.velocity;
+                velocity.y = _launch.y;
+                _movement.Movement.velocity = velocity;
+                _movement.Grounded = false;
+
+                if (_movement.Jumping != null)
+                {
+                    _movement.Jumping.jumping = true;
+                    _movement.Jumping.jumpDir = Vector3.up;
+                    _movement.Jumping.lastStartTime = Time.time;
+                }
+
+                _launch = Vector3.zero;
+            }
+
             PlayerEffects effects = Effects(LocalId);
             _movement.transform.localScale = _movementScale * effects.Scale;
-            CharacterController controller = _movement.PJJBJAPJODD;
-            if (controller && effects.Fly != _flying)
+            CharacterController controller = _movement.Controller;
+            bool flying = effects.Fly || effects.Noclip;
+
+            if (controller && flying != _flying)
             {
-                _flying = effects.Fly;
+                _flying = flying;
                 controller.enabled = _flying ? false : _controllerEnabled;
             }
 
-            if (effects.Frozen || _menu.IOMIAHNBDOG || Cursor.lockState != CursorLockMode.Locked)
+            if (effects.Frozen || _menu.IsPaused || Cursor.lockState != CursorLockMode.Locked)
             {
                 return;
             }
 
-            if (effects.Fly)
+            if (flying)
             {
                 Camera camera = Camera.main;
                 if (!camera) return;
 
-                Vector3 direction = 
-                    camera.transform.forward * ((Input.GetKey(KeyCode.W) ? 1 : 0) - (Input.GetKey(KeyCode.S) ? 1 : 0)) +
+                Vector3 direction = camera.transform.forward * ((Input.GetKey(KeyCode.W) ? 1 : 0) - (Input.GetKey(KeyCode.S) ? 1 : 0)) +
                     camera.transform.right * ((Input.GetKey(KeyCode.D) ? 1 : 0) - (Input.GetKey(KeyCode.A) ? 1 : 0)) +
                     Vector3.up * ((Input.GetKey(KeyCode.Space) ? 1 : 0) - (Input.GetKey(KeyCode.LeftControl) ? 1 : 0));
 
                 _movement.transform.position += direction.normalized * (Input.GetKey(KeyCode.LeftShift) ? 18 : 7) * Mathf.Min(Time.unscaledDeltaTime, 0.05f);
-            }
-            else if (_launch.sqrMagnitude > 0.01f && controller && controller.enabled)
-            {
-                controller.Move(_launch * Time.deltaTime);
-                _launch = Vector3.MoveTowards(_launch, Vector3.zero, 12f * Time.deltaTime);
             }
         }
 
@@ -794,9 +880,14 @@ namespace NullServers.Sandbox
             if (_movement)
             {
                 _movement.transform.localScale = _movementScale;
-                if (_movement.PJJBJAPJODD)
+                if (_movement.Movement != null)
                 {
-                    _movement.PJJBJAPJODD.enabled = _controllerEnabled;
+                    _movement.Movement.gravity = _movementGravity;
+                }
+
+                if (_movement.Controller)
+                {
+                    _movement.Controller.enabled = _controllerEnabled;
                 }
             }
 
@@ -805,15 +896,37 @@ namespace NullServers.Sandbox
             _launch = Vector3.zero;
         }
 
+        private static bool BeforeLook(FPSMouseLook __instance)
+        {
+            SandboxWorld world = _instance;
+            if (!world.Active || !(world.Hands.Rotating || world.Living.IsDown(world.LocalId))) return true;
+
+            FPScontroller controller = __instance.GetComponentInParent(Il2CppType.Of<FPScontroller>())?.Cast<FPScontroller>();
+            return !controller || controller != world._movement;
+        }
+
         private static bool BeforeMovement(FPScontroller __instance)
         {
             SandboxWorld world = _instance;
-            return 
-                !world.Active ||
-                __instance != world._movement ||
-                !(world.Effects(world.LocalId).Fly ||
-                world.Effects(world.LocalId).Frozen ||
-                world.Gun.Rotating);
+            if (!world.Active || __instance != world._movement) return true;
+
+            PlayerEffects effects = world.Effects(world.LocalId);
+            return !(effects.Fly || effects.Noclip || effects.Frozen || world.Hands.Rotating || world.Living.IsDown(world.LocalId));
+        }
+
+        private static bool BeforeFixedMovement(FPScontroller __instance)
+        {
+            SandboxWorld world = _instance;
+            bool allowed = BeforeMovement(__instance);
+
+            if (allowed && world.Active && __instance == world._movement && world.Environment.World is { } settings && __instance.Movement != null)
+            {
+                Vector3 velocity = __instance.Movement.velocity;
+                velocity += new Vector3(settings.Gravity.X, 0f, settings.Gravity.Z) * Time.fixedDeltaTime;
+                __instance.Movement.velocity = velocity;
+            }
+
+            return allowed;
         }
 
         internal static int DamageOwner(PlayerDamage damage)
@@ -823,13 +936,22 @@ namespace NullServers.Sandbox
                 return damage.OwnerId;
             }
 
-            return Object.FindObjectsOfType<PlayerNetworkController>().FirstOrDefault(player => player.FJEJDPCPOJC == damage)?.OwnerId ?? -1;
+            return Object.FindObjectsOfType<PlayerNetworkController>().FirstOrDefault(player => player.Damage == damage)?.OwnerId ?? -1;
+        }
+
+        internal static bool Typing()
+        {
+            MultiplayerChat chat = MultiplayerChat.Current;
+            if (chat && chat.Input && chat.Input.isFocused) return true;
+
+            GameObject selected = UnityEngine.EventSystems.EventSystem.current?.currentSelectedGameObject;
+            UnityEngine.UI.InputField field = selected ? selected.GetComponent(Il2CppType.Of<UnityEngine.UI.InputField>())?.Cast<UnityEngine.UI.InputField>() : null;
+            return field && field.isFocused;
         }
 
         private static bool BeforeDamage(PlayerDamage __instance, float __0)
         {
-            return 
-                __0 <= 0f || !_instance.Active ||
+            return __0 <= 0f || !_instance.Active ||
                 !_instance.Effects(DamageOwner(__instance)).Invincible;
         }
     }

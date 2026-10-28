@@ -5,7 +5,6 @@ namespace NullServers.UI
 {
     internal sealed class ColorPicker
     {
-        private Texture2D _wheel;
         private GUIStyle _label;
         private GUIStyle _input;
         private GUIStyle _previewStyle;
@@ -34,13 +33,7 @@ namespace NullServers.UI
 
             float width = Mathf.Clamp(Screen.height * 0.42f, 220f, 360f);
             float height = width + 150f;
-            _panel = new Rect
-            (
-                Mathf.Clamp(anchor.xMax - width, 8f, Screen.width - width - 8f),
-                anchor.yMax + 6f,
-                width,
-                height
-            );
+            _panel = new Rect(Mathf.Clamp(anchor.xMax - width, 8f, Screen.width - width - 8f), anchor.yMax + 6f, width, height);
 
             if (_panel.yMax > Screen.height - 8)
             {
@@ -69,14 +62,20 @@ namespace NullServers.UI
             if (!IsOpen) return;
 
             Event current = Event.current;
-            if
-            (
-                (current.type == EventType.MouseDown && !_panel.Contains(current.mousePosition)) ||
-                (current.type == EventType.KeyDown && current.keyCode == KeyCode.Escape)
-            )
+            if ((current.type == EventType.MouseDown && !_panel.Contains(current.mousePosition)) ||
+                (current.type == EventType.KeyDown && current.keyCode == KeyCode.Escape))
             {
                 Close();
                 current.Use();
+            }
+        }
+
+        internal void BlockInput()
+        {
+            HandleInput();
+            if (IsOpen && Event.current.type != EventType.Layout && Event.current.type != EventType.Repaint)
+            {
+                GUI.enabled = false;
             }
         }
 
@@ -90,11 +89,7 @@ namespace NullServers.UI
             ColorUtility.TryParseHtmlString(hex, out Color color);
             GUI.color = color;
 
-            GUI.DrawTexture
-            (
-                new Rect(rect.x + 2f, rect.y + 2f, rect.width - 4f, rect.height - 4f),
-                Texture2D.whiteTexture
-            );
+            GUI.DrawTexture(new Rect(rect.x + 2f, rect.y + 2f, rect.width - 4f, rect.height - 4f), Texture2D.whiteTexture);
 
             GUI.color = old;
 
@@ -105,52 +100,11 @@ namespace NullServers.UI
         {
             if (!IsOpen) return;
 
-            if (!_wheel)
+            if (_label == null)
             {
-                const int size = 256;
-                Color[] pixels = new Color[size * size];
-
-                for (int y = 0; y < size; y++)
-                {
-                    for (int x = 0; x < size; x++)
-                    {
-                        Vector2 point = new((x + 0.5f) / size * 2f - 1f, (y + 0.5f) / size * 2f - 1f);
-                        float saturation = point.magnitude;
-                        Color color = Color.HSVToRGB
-                        (
-                            Mathf.Repeat(Mathf.Atan2(point.y, point.x) / (Mathf.PI * 2f), 1f),
-                            Mathf.Min(1f, saturation),
-                            1f
-                        );
-                        color.a = Mathf.Clamp01((1f - saturation) * size * 0.5f);
-                        pixels[y * size + x] = color;
-                    }
-                }
-
-                _wheel = new Texture2D(size, size, TextureFormat.RGBA32, false)
-                {
-                    hideFlags = HideFlags.HideAndDontSave
-                };
-                _wheel.SetPixels(pixels);
-                _wheel.Apply(false, true);
-
-                _label = new GUIStyle(skin.customStyles[0])
-                {
-                    alignment = TextAnchor.MiddleLeft,
-                    richText = false
-                };
-
-                _input = new GUIStyle(GUI.skin.textField)
-                {
-                    alignment = TextAnchor.MiddleCenter,
-                    richText = false
-                };
-
-                _previewStyle = new GUIStyle(_label)
-                {
-                    richText = true,
-                    wordWrap = true
-                };
+                _label = MenuUi.TextStyle(skin.customStyles[0], alignment: TextAnchor.MiddleLeft);
+                _input = MenuUi.TextStyle(GUI.skin.textField, alignment: TextAnchor.MiddleCenter);
+                _previewStyle = MenuUi.TextStyle(_label, richText: true, wordWrap: true);
             }
 
             Color oldColor = GUI.color;
@@ -161,11 +115,9 @@ namespace NullServers.UI
             GUI.DrawTexture(_panel, Texture2D.whiteTexture);
 
             GUI.color = new Color(0.025f, 0.025f, 0.035f, 1f);
-            GUI.DrawTexture
-            (
+            GUI.DrawTexture(
                 new Rect(_panel.x + 1f, _panel.y + 1f, _panel.width - 2f, _panel.height - 2f),
-                Texture2D.whiteTexture
-            );
+                Texture2D.whiteTexture);
 
             GUI.color = Color.white;
             _label.fontSize = _input.fontSize = Mathf.Max(14, Screen.height / 40);
@@ -175,13 +127,14 @@ namespace NullServers.UI
             GUI.Label(new Rect(_panel.x + 12f, _panel.y + 4f, _panel.width - 24f, 24f), "Color", _label);
 
             GUI.color = new Color(_value, _value, _value, 1f);
-            GUI.DrawTexture(wheel, _wheel);
+            GUI.DrawTexture(wheel, MenuUi.ColorWheel);
 
             GUI.color = Color.white;
             _wheelControl = GUIUtility.GetControlID(0x4E4657, FocusType.Passive);
 
             Event current = Event.current;
             Vector2 pointInWheel = (current.mousePosition - wheel.center) / (wheel.width * 0.5f);
+
             if (current.type == EventType.MouseDown && current.button == 0 && pointInWheel.sqrMagnitude <= 1f)
             {
                 GUIUtility.hotControl = _wheelControl;
@@ -215,23 +168,15 @@ namespace NullServers.UI
 
             float yRow = wheel.yMax + 8f;
             string selectedHex = "#" + ColorUtility.ToHtmlStringRGB(Color.HSVToRGB(_hue, _saturation, _value));
-            GUI.Label
-            (
+            GUI.Label(
                 new Rect(_panel.x + 12f, yRow, _panel.width - 24f, 30f),
                 $"<color={selectedHex}>{_sample ?? "Preview"}</color>",
-                _previewStyle
-            );
+                _previewStyle);
 
             yRow += 34f;
             GUI.Label(new Rect(_panel.x + 12f, yRow, _panel.width - 24f, 22f), "Brightness", _label);
 
-            float value = GUI.HorizontalSlider
-            (
-                new Rect(_panel.x + 12f, yRow + 24f, _panel.width - 24f, 18f),
-                _value,
-                0f,
-                1f
-            );
+            float value = GUI.HorizontalSlider(new Rect(_panel.x + 12f, yRow + 24f, _panel.width - 24f, 18f), _value, 0f, 1f);
 
             if (value != _value)
             {
@@ -240,14 +185,13 @@ namespace NullServers.UI
             }
 
             yRow += 48f;
-            Swatch
-            (
+            Swatch(
                 new Rect(_panel.x + 12f, yRow, 28f, 28f),
-                "#" + ColorUtility.ToHtmlStringRGB(Color.HSVToRGB(_hue, _saturation, _value))
-            );
+                "#" + ColorUtility.ToHtmlStringRGB(Color.HSVToRGB(_hue, _saturation, _value)));
 
             GUI.SetNextControlName("PickerHex");
             string hex = GUI.TextField(new Rect(_panel.x + 48f, yRow, _panel.width - 124f, 28f), _hex, 7, _input);
+
             if (hex != _hex)
             {
                 _hex = hex;

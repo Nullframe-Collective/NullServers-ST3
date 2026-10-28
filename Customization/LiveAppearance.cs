@@ -1,8 +1,10 @@
-using HarmonyLib;
+﻿using HarmonyLib;
 using Il2Cpp;
 using Il2CppCodeStage.AntiCheat.Storage;
 using MelonLoader;
+using NullServers.Additional;
 using NullServers.Network;
+using NullServers.Players;
 using UnityEngine;
 
 namespace NullServers.Customization
@@ -12,6 +14,7 @@ namespace NullServers.Customization
         private static LiveAppearance _instance;
         private readonly RelaySession _session;
         private readonly MelonLogger.Instance _logger;
+        private readonly HatSynchronization _slots;
         private readonly Dictionary<IntPtr, (SyncCustomization Sync, AppearanceVisual Visual)> _visuals = new();
         private readonly Dictionary<int, string> _hats = new();
         private string _roomId;
@@ -21,7 +24,7 @@ namespace NullServers.Customization
 
         internal IReadOnlyDictionary<int, string> Hats => _hats;
 
-        internal bool Active => 
+        internal bool Active =>
             _session.IsNullFrame &&
             !_session.IsSwitching &&
             _session.Relay &&
@@ -29,11 +32,16 @@ namespace NullServers.Customization
 
         internal SyncCustomization Local { get; private set; }
 
-        internal LiveAppearance(HarmonyLib.Harmony harmony, RelaySession session, MelonLogger.Instance logger)
+        internal bool SlotsAvailable => _slots.Available;
+
+        internal LiveAppearance(HarmonyLib.Harmony harmony, RelaySession session, PlayerProfiles profiles, MelonLogger.Instance logger)
         {
             _instance = this;
             _session = session;
             _logger = logger;
+            _slots = new HatSynchronization(session, profiles, logger);
+
+            Frameworks.Customization?.PlayerReady(CaptureCustomHats);
 
             harmony.Patch(
                 AccessTools.Method(typeof(CharacterCustomization), nameof(CharacterCustomization.Awake)),
@@ -44,34 +52,33 @@ namespace NullServers.Customization
                 prefix: new HarmonyMethod(typeof(LiveAppearance), nameof(BeforeNativeAppearance)));
         }
 
-        private static void CaptureHats(CharacterCustomization __instance)
+        private void CaptureCustomHats(SyncCustomization source)
         {
-            var hats = _instance._hats;
+            FrameworkAddon addon = Frameworks.Customization;
 
-            foreach (var list in new[] { __instance.GKCNMADGAAF, __instance.PFGCEJKOIDO })
+            if (addon == null)
             {
-                if (list == null) continue;
-
-                foreach (CharacterCustomization.hat hat in list)
-                {
-                    if (hat == null) continue;
-
-                    hats[hat.hatID] = hat.hatName;
-                }
+                return;
             }
 
-            if (__instance.DEGGIDJJNDO != null)
+            foreach (object info in addon.Items)
             {
-                foreach (CharacterCustomization.hatList group in __instance.DEGGIDJJNDO)
+                object[] arguments = { source, addon.Text(info, "Id"), -1 };
+
+                if (addon.Call<bool>(addon.Catalog, "TryGetHatId", arguments))
                 {
-                    if (group?.hat == null) continue;
+                    _hats[(int)arguments[2]] = addon.Text(info, "Name");
+                }
+            }
+        }
 
-                    foreach (CharacterCustomization.hat hat in group.hat)
-                    {
-                        if (hat == null) continue;
-
-                        hats[hat.hatID] = hat.hatName;
-                    }
+        private static void CaptureHats(CharacterCustomization __instance)
+        {
+            foreach (CharacterCustomization.hat hat in __instance.AllHats)
+            {
+                if (hat != null)
+                {
+                    _instance._hats[hat.hatID] = hat.hatName;
                 }
             }
         }
@@ -89,6 +96,13 @@ namespace NullServers.Customization
         private AppearanceVisual VisualFor(SyncCustomization sync)
         {
             EnsureRoom();
+
+            if (_visuals.TryGetValue(sync.Pointer, out var current) && current.Visual.HatCount != sync.Hats.Count)
+            {
+                current.Visual.Dispose();
+                _visuals.Remove(sync.Pointer);
+            }
+
             if (!_visuals.TryGetValue(sync.Pointer, out var entry))
             {
                 _visuals[sync.Pointer] = entry = (sync, new AppearanceVisual(sync));
@@ -107,7 +121,11 @@ namespace NullServers.Customization
             EnsureRoom();
             Local = null;
 
-            if (!Active) return;
+            if (!Active)
+            {
+                _slots.Update(null);
+                return;
+            }
 
             foreach (IntPtr pointer in _visuals.Where(pair => !pair.Value.Sync).Select(pair => pair.Key).ToArray())
             {
@@ -117,7 +135,7 @@ namespace NullServers.Customization
 
             foreach (SyncCustomization sync in UnityEngine.Object.FindObjectsOfType<SyncCustomization>())
             {
-                if (!sync.IsClientInitialized || sync.CLENBEHPEEL < 0 || sync.IGDAIDNEJBO) continue;
+                if (!sync.IsClientInitialized || sync.HatId < 0 || sync.FromLegacyReplay) continue;
 
                 if (sync.IsOwner)
                 {
@@ -126,7 +144,7 @@ namespace NullServers.Customization
 
                 Appearance appearance = Read(sync);
 
-                if (sync.CNNHJCHFEBO)
+                if (sync.SkinsDisabled)
                 {
                     appearance = appearance with
                     {
@@ -136,6 +154,8 @@ namespace NullServers.Customization
 
                 VisualFor(sync).Apply(appearance, Textures);
             }
+
+            _slots.Update(Local);
         }
 
         private void EnsureRoom()
@@ -157,20 +177,19 @@ namespace NullServers.Customization
 
         internal static Appearance Read(SyncCustomization sync)
         {
-            Vector3 color = sync.LJALDBMBHHN;
-            string[] urls = (sync.CLABNNBNKAF ?? "").Split('|');
+            Vector3 color = sync.FurColor;
+            string[] urls = (sync.SkinData ?? "").Split('|');
             string Url(int index) => urls.Length > index ? urls[index] : "";
 
-            return new Appearance
-            (
-                sync.CLENBEHPEEL,
+            return new Appearance(
+                sync.HatId,
                 "#" + ColorUtility.ToHtmlStringRGB(new Color(color.x, color.y, color.z)),
-                !string.IsNullOrEmpty(sync.CLABNNBNKAF),
+                !string.IsNullOrEmpty(sync.SkinData),
                 Url(0),
                 Url(1),
                 Url(2),
-                Url(3)
-            );
+                Url(3),
+                _instance?._slots.HatsFor(sync));
         }
 
         internal bool Apply(Appearance appearance, out string error)
@@ -178,16 +197,24 @@ namespace NullServers.Customization
             error = "Your character is not available yet.";
 
             SyncCustomization sync = Local;
-            if 
-            (
-                !Active ||
+            if (!Active ||
                 !sync ||
                 !sync.IsOwner ||
                 !sync.IsClientInitialized ||
-                !appearance.Validate(sync.GKCNMADGAAF.Count, out error)
-            )
+                !appearance.Validate(sync.Hats.Count, out error))
             {
                 return false;
+            }
+
+            if (!_slots.Save(sync, appearance.ExtraHats, out error))
+            {
+                error ??= "Extra hat slots are only available on NullFrame servers with CustomPlayerCustomization enabled.";
+                return false;
+            }
+
+            if (Frameworks.Customization?.Read<int>(Frameworks.Customization.Catalog, "SelectionApi") == 1)
+            {
+                Frameworks.Customization.Call<object>(Frameworks.Customization.Catalog, "SaveSelection", sync, appearance.Hat);
             }
 
             ColorUtility.TryParseHtmlString(appearance.FurColor, out var color);
@@ -211,13 +238,13 @@ namespace NullServers.Customization
 
             ObscuredPrefs.Save();
 
-            sync.CLENBEHPEEL = appearance.Hat;
-            sync.LJALDBMBHHN = new Vector3(color.r, color.g, color.b);
-            sync.CLABNNBNKAF = appearance.SkinData;
-            sync.BIHMIMOKJLM(appearance.Hat, sync.LJALDBMBHHN, appearance.SkinData);
+            sync.HatId = appearance.Hat;
+            sync.FurColor = new Vector3(color.r, color.g, color.b);
+            sync.SkinData = appearance.SkinData;
+            sync.SendAppearance(appearance.Hat, sync.FurColor, appearance.SkinData);
             VisualFor(sync).Apply(appearance, Textures);
 
-            _logger?.Msg($"Appearance updated: hat {appearance.Hat}; fur {appearance.FurColor}; skin={appearance.UseSkin}.");
+            _logger.Msg($"Appearance updated: hat {appearance.Hat}; fur {appearance.FurColor}; skin={appearance.UseSkin}.");
 
             error = null;
 

@@ -1,4 +1,4 @@
-namespace NullServers.Network
+﻿namespace NullServers.Network
 {
     internal enum RpcCategory
     {
@@ -12,39 +12,12 @@ namespace NullServers.Network
 
     internal sealed class RpcBudget
     {
-        private sealed class Bucket
-        {
-            private readonly double _rate;
-            private readonly double _capacity;
-            private double _tokens;
-            private double _updated;
-
-            internal Bucket(double rate, double capacity, double now)
-            {
-                _rate = rate;
-                _capacity = _tokens = capacity;
-                _updated = now;
-            }
-
-            internal bool Spend(double now, int amount)
-            {
-                _tokens = Math.Min(_capacity, _tokens + Math.Max(0, now - _updated) * _rate);
-                _updated = Math.Max(now, _updated);
-
-                if (amount > _tokens) return false;
-
-                _tokens -= amount;
-
-                return true;
-            }
-        }
-
-        private readonly Bucket _calls;
-        private readonly Bucket _bytes;
-        private readonly Bucket _actors;
-        private readonly Bucket _consoleActors;
-        private readonly Bucket _objects;
-        private readonly Dictionary<(IntPtr Type, uint Method), Bucket> _methods = new();
+        private readonly TrafficBudget _calls;
+        private readonly TrafficBudget _bytes;
+        private readonly TrafficBudget _actors;
+        private readonly TrafficBudget _consoleActors;
+        private readonly TrafficBudget _objects;
+        private readonly Dictionary<(IntPtr Type, uint Method), TrafficBudget> _methods = new();
         private double _malformedAt;
         private int _malformed;
         private double _firstDrop;
@@ -56,19 +29,19 @@ namespace NullServers.Network
 
         internal RpcBudget(double now)
         {
-            _calls = new Bucket(600, 1200, now);
-            _bytes = new Bucket(256 * 1024, 512 * 1024, now);
-            _actors = new Bucket(1, 3, now);
-            _consoleActors = new Bucket(12, 32, now);
-            _objects = new Bucket(40, 80, now);
+            _calls = new TrafficBudget(600, 1200, now);
+            _bytes = new TrafficBudget(256 * 1024, 512 * 1024, now);
+            _actors = new TrafficBudget(1, 3, now);
+            _consoleActors = new TrafficBudget(12, 32, now);
+            _objects = new TrafficBudget(40, 80, now);
             _malformedAt = now;
         }
 
-        internal bool AllowPacket(double now, int bytes) => bytes >= 0 && _calls.Spend(now, 1) && _bytes.Spend(now, bytes);
+        internal bool AllowPacket(double now, int bytes) => bytes >= 0 && _calls.Spend(1, now) && _bytes.Spend(bytes, now);
 
         internal bool AllowObject(double now, bool actor, bool console = false)
         {
-            return (!actor || (console ? _consoleActors : _actors).Spend(now, 1)) && _objects.Spend(now, 1);
+            return (!actor || (console ? _consoleActors : _actors).Spend(1, now)) && _objects.Spend(1, now);
         }
 
         internal bool AllowMethod(double now, IntPtr type, uint method, RpcCategory category)
@@ -86,10 +59,10 @@ namespace NullServers.Network
                     _ => (200, 400)
                 };
 
-                _methods[key] = bucket = new Bucket(rate, burst, now);
+                _methods[key] = bucket = new TrafficBudget(rate, burst, now);
             }
 
-            return bucket.Spend(now, 1);
+            return bucket.Spend(1, now);
         }
 
         internal bool Malformed(double now)

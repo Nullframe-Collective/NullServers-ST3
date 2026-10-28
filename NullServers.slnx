@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="NullServers.csproj" />
+  <Project Path="../AssetsForMod/CustomWeaponFramework/CustomWeaponsFramework.csproj" />
+  <Project Path="../AssetsForMod/CustomPlayerCustomization/CustomPlayerCustomization.csproj" />
+  <Project Path="tests/NullServers.Checks.csproj" />
+  <Project Path="research/tools/AddonChecks/AddonChecks.csproj" />
+</Solution>

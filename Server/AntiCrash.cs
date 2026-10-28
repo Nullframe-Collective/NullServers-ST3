@@ -81,8 +81,7 @@ namespace NullServers.Server
                 postfix: new HarmonyMethod(typeof(AntiCrash), nameof(AfterAllocationCheck)));
 
             harmony.Patch(
-                AccessTools.Method
-                (
+                AccessTools.Method(
                     typeof(CPPBDGGKHCB),
                     nameof(CPPBDGGKHCB.FONDGACBGAB),
                     [
@@ -90,8 +89,7 @@ namespace NullServers.Server
                         typeof(Vector3),
                         typeof(Quaternion),
                         typeof(NetworkConnection)
-                    ]
-                ),
+                    ]),
                 prefix: First(nameof(BeforeSpawnPrefab)),
                 postfix: new HarmonyMethod(typeof(AntiCrash), nameof(AfterSpawned)),
                 finalizer: new HarmonyMethod(typeof(AntiCrash), nameof(AfterSpawnPrefab)));
@@ -120,11 +118,9 @@ namespace NullServers.Server
             priority = Priority.First
         };
 
-        private static void PatchReader(HarmonyLib.Harmony harmony, Type type, string method, string check) => harmony.Patch
-        (
+        private static void PatchReader(HarmonyLib.Harmony harmony, Type type, string method, string check) => harmony.Patch(
             AccessTools.Method(type, method),
-            prefix: First(check)
-        );
+            prefix: First(check));
 
         internal void Update()
         {
@@ -143,22 +139,13 @@ namespace NullServers.Server
 
             while (_pending.TryDequeue(out var blocked))
             {
-                if 
-                (
-                    !blocked.Removed &&
-                    _control.RemoveAbusivePlayer
-                    (
-                        blocked.Connection,
-                        blocked.Account,
-                        blocked.Nickname,
-                        blocked.PendingBan
-                    )
-                )
+                if (!blocked.Removed &&
+                    _control.RemoveAbusivePlayer(blocked.Connection, blocked.Account, blocked.Nickname, blocked.PendingBan))
                 {
                     blocked.Removed = true;
                     Removed++;
                     int cleaned = Cleanup(blocked);
-                    _logger?.Warning($"Anti-Crash cleanup for client {blocked.Connection.ClientId}: removed {cleaned} network objects; current round preserved.");
+                    _logger.Warning($"Anti-Crash cleanup for client {blocked.Connection.ClientId}: removed {cleaned} network objects; current round preserved.");
                 }
             }
 
@@ -169,12 +156,9 @@ namespace NullServers.Server
             foreach (var pair in _clients.ToArray())
             {
                 Client client = pair.Value;
-                if 
-                (
-                    !_control.Manager.ServerManager.Clients.TryGetValue(pair.Key, out var current) ||
+                if (!_control.Manager.ServerManager.Clients.TryGetValue(pair.Key, out var current) ||
                     current.Pointer != client.Connection.Pointer ||
-                    !current.IsValid
-                )
+                    !current.IsValid)
                 {
                     _clients.Remove(pair.Key);
                     continue;
@@ -197,18 +181,15 @@ namespace NullServers.Server
 
             foreach (var entry in client.Objects)
             {
-                if 
-                (
-                    !objects.TryGetValue(entry.Key, out var current) ||
+                if (!objects.TryGetValue(entry.Key, out var current) ||
                     !current ||
                     current.Pointer != entry.Value.Pointer ||
-                    current.IsSceneObject
-                )
+                    current.IsSceneObject)
                 {
                     continue;
                 }
 
-                CPPBDGGKHCB.OAFNAAMPNHG(current.gameObject);
+                NetworkSpawner.Despawn(current.gameObject);
                 removed++;
             }
 
@@ -250,13 +231,10 @@ namespace NullServers.Server
             data = default;
 
             var buffer = reader?._buffer;
-            if 
-            (
-                buffer == null ||
+            if (buffer == null ||
                 reader.Position < 0 ||
                 reader.Remaining < 0 ||
-                reader.Position > buffer.Length - reader.Remaining
-            )
+                reader.Position > buffer.Length - reader.Remaining)
             {
                 return false;
             }
@@ -287,12 +265,9 @@ namespace NullServers.Server
 
             if (queueBan && client.PendingBan == null)
             {
-                if 
-                (
-                    client.Account == null &&
+                if (client.Account == null &&
                     _control.TryIdentity(client.Connection.ClientId, out var identity) &&
-                    !identity.IsGuest
-                )
+                    !identity.IsGuest)
                 {
                     client.Account = identity.Username;
                 }
@@ -310,17 +285,13 @@ namespace NullServers.Server
                 _logger.Warning($"Anti-Crash {action} client {client.Connection.ClientId}: {reason}.");
             }
 
-            if 
-            (
-                rejection == Rejection.Throttled &&
+            if (rejection == Rejection.Throttled &&
                 _frame is { Reliable: true } frame &&
                 frame.Reader.Pointer == reader.Pointer &&
                 frame.End >= reader.Position &&
-                frame.End - reader.Position <= reader.Remaining
-            )
+                frame.End - reader.Position <= reader.Remaining)
             {
                 reader.Skip(frame.End - reader.Position);
-                
                 return false;
             }
 
@@ -350,12 +321,9 @@ namespace NullServers.Server
                 return instance.Reject(client, reader, "RPC traffic limit", Rejection.Flood);
             }
 
-            if 
-            (
-                !instance._control.Manager.ServerManager.Objects.Spawned.TryGetValue(header.ObjectId, out var target) ||
+            if (!instance._control.Manager.ServerManager.Objects.Spawned.TryGetValue(header.ObjectId, out var target) ||
                 !target ||
-                header.Component >= target.NetworkBehaviours.Count
-            )
+                header.Component >= target.NetworkBehaviours.Count)
             {
                 instance.Blocked++;
 
@@ -371,13 +339,11 @@ namespace NullServers.Server
                 return false;
             }
 
-            _frame = new Frame
-            (
+            _frame = new Frame(
                 reader,
                 client,
                 reader.Position + header.PayloadOffset + header.PayloadLength,
-                channel == Channel.Reliable
-            );
+                channel == Channel.Reliable);
 
             return true;
         }
@@ -400,11 +366,8 @@ namespace NullServers.Server
                 return instance.Reject(client, reader, "invalid broadcast length", Rejection.Malformed);
             }
 
-            if 
-            (
-                !client.Budget.AllowPacket(Time.unscaledTime, length) ||
-                !client.Budget.AllowMethod(Time.unscaledTime, IntPtr.Zero, 0, RpcCategory.Broadcast)
-            )
+            if (!client.Budget.AllowPacket(Time.unscaledTime, length) ||
+                !client.Budget.AllowMethod(Time.unscaledTime, IntPtr.Zero, 0, RpcCategory.Broadcast))
             {
                 return instance.Reject(client, reader, "broadcast traffic limit", Rejection.Flood);
             }
@@ -425,6 +388,7 @@ namespace NullServers.Server
             AntiCrash instance = _instance;
             byte size = __instance._rpcHashSize;
             int remaining = frame.End - reader.Position;
+
             if (size is not (1 or 2) || remaining < size || !Data(reader, out var data))
             {
                 return instance.Reject(frame.Client, reader, "truncated RPC method", Rejection.Malformed);
@@ -439,36 +403,25 @@ namespace NullServers.Server
             IntPtr type = IL2CPP.il2cpp_object_get_class(__instance.Pointer);
             if (!instance._categories.TryGetValue(type, out var category))
             {
-                instance._categories[type] = category = 
-                    __instance.TryCast<MultiplayerChat>() ? RpcCategory.Chat :
-                    __instance.TryCast<SyncCustomization>() ? RpcCategory.Appearance : 
+                instance._categories[type] = category = __instance.TryCast<MultiplayerChat>() ? RpcCategory.Chat :
+                    __instance.TryCast<SyncCustomization>() ? RpcCategory.Appearance :
                     __instance.TryCast<Volume>() ? RpcCategory.Spawn :
                     __instance.TryCast<WhoKilledWho>() ? RpcCategory.Notification : RpcCategory.General;
             }
 
             if (!frame.Client.Budget.AllowMethod(Time.unscaledTime, type, category == RpcCategory.General ? hash : 0, category))
             {
-                return instance.Reject
-                (
+                return instance.Reject(
                     frame.Client,
                     reader,
                     "RPC method rate limit",
-                    category == RpcCategory.Spawn ? Rejection.Throttled : Rejection.Flood
-                );
+                    category == RpcCategory.Spawn ? Rejection.Throttled : Rejection.Flood);
             }
 
             frame.ExpensiveSpawn = category == RpcCategory.Spawn || __instance.TryCast<RoomMultiplayerMenu>();
 
-            if 
-            (
-                category == RpcCategory.Notification &&
-                !RpcPacket.ValidBody
-                (
-                    data.Slice(size, remaining - size),
-                    RpcSchema.Notification,
-                    frame.Reliable
-                )
-            )
+            if (category == RpcCategory.Notification &&
+                !RpcPacket.ValidBody(data.Slice(size, remaining - size), RpcSchema.Notification, frame.Reliable))
             {
                 return instance.Reject(frame.Client, reader, "invalid notification data", Rejection.Malformed);
             }
@@ -485,8 +438,7 @@ namespace NullServers.Server
             }
 
             int length = frame.End - reader.Position;
-            return 
-                Data(reader, out var data) &&
+            return Data(reader, out var data) &&
                 length >= 0 &&
                 length <= data.Length &&
                 RpcPacket.ValidBody(data.Slice(0, length), schema, frame.Reliable) ||
@@ -521,30 +473,49 @@ namespace NullServers.Server
             }
         }
 
-        private static bool BeforeSpawnPrefab(GameObject __0, out bool __state)
+        private static bool BeforeSpawnPrefab(GameObject __0, NetworkConnection __3, out bool __state)
         {
             __state = _frame?.ExpensiveSpawn == true;
-            if (_frame == null || !__0) return true;
+
+            if (!__0)
+            {
+                return true;
+            }
+
+            bool avatar = __0.GetComponentInChildren(Il2CppType.Of<PlayerNetworkController>(), true) ||
+                          __0.GetComponentInChildren(Il2CppType.Of<PlayerMonster>(), true);
+            NetworkConnection owner = _frame?.Client.Connection ?? __3;
+
+            if (avatar && _instance._control.CanManage && owner != null && owner.ClientId != RelayProtocol.HostPlayerId &&
+                !_instance._control.Compatibility.Allows(owner))
+            {
+                if (_frame != null)
+                {
+                    return _instance.Reject(_frame.Client, _frame.Reader, "framework compatibility is not confirmed", Rejection.Throttled);
+                }
+
+                return false;
+            }
+
+            if (_frame == null)
+            {
+                return true;
+            }
 
             if (_frame.Client.PendingBan != null) return false;
 
-            if 
-            (
-                __0.GetComponentInChildren(Il2CppType.Of<RoomMultiplayerMenu>(), true) ||
+            if (__0.GetComponentInChildren(Il2CppType.Of<RoomMultiplayerMenu>(), true) ||
                 __0.GetComponentInChildren(Il2CppType.Of<NetBootstrap>(), true) ||
-                __0.GetComponentInChildren(Il2CppType.Of<NetworkManager>(), true)
-            )
+                __0.GetComponentInChildren(Il2CppType.Of<NetworkManager>(), true))
             {
-                return _instance.Reject
-                (
+                return _instance.Reject(
                     _frame.Client,
                     _frame.Reader,
                     "forbidden network prefab: " + __0.name,
-                    Rejection.Prohibited
-                );
+                    Rejection.Prohibited);
             }
 
-            _frame.ExpensiveSpawn |= 
+            _frame.ExpensiveSpawn |=
                 __0.GetComponent(Il2CppType.Of<PlayerNetworkController>()) ||
                 __0.GetComponent(Il2CppType.Of<Bot>()) ||
                 __0.GetComponent(Il2CppType.Of<BossBot>());
@@ -573,20 +544,11 @@ namespace NullServers.Server
             Frame frame = _frame;
             if (frame == null) return true;
 
-            if 
-            (
-                frame.Client.PendingBan != null ||
-                !frame.Client.Budget.AllowObject
-                (
-                    Time.unscaledTime,
-                    frame.ExpensiveSpawn,
-                    frame.ConsoleSpawn
-                )
-            )
+            if (frame.Client.PendingBan != null ||
+                !frame.Client.Budget.AllowObject(Time.unscaledTime, frame.ExpensiveSpawn, frame.ConsoleSpawn))
             {
                 _instance.Reject(frame.Client, frame.Reader, "network object spawn limit", Rejection.Throttled);
                 __result = false;
-
                 return false;
             }
 
@@ -596,7 +558,6 @@ namespace NullServers.Server
         private static Exception AfterPacket(Exception __exception, Frame __state)
         {
             _frame = __state;
-
             return __exception;
         }
     }

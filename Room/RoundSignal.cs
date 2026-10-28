@@ -1,5 +1,4 @@
-using System.Text;
-using System.Text.Json;
+using NullServers.Network;
 
 namespace NullServers.Room
 {
@@ -17,8 +16,7 @@ namespace NullServers.Room
         public bool Missing { get; }
         public ulong SceneId { get; }
 
-        public RoundSignal
-        (
+        public RoundSignal(
             int version,
             string roomId,
             string revision,
@@ -26,8 +24,7 @@ namespace NullServers.Room
             bool ready,
             int objectId,
             bool missing = false,
-            ulong sceneId = 0
-        )
+            ulong sceneId = 0)
         {
             Version = version;
             RoomId = roomId;
@@ -42,43 +39,27 @@ namespace NullServers.Room
         internal static bool TryParse(string json, out RoundSignal signal)
         {
             signal = null;
-
-            if (string.IsNullOrEmpty(json) || Encoding.UTF8.GetByteCount(json) > MaxBytes)
+            RoundSignal value = JsonPacket.Read<RoundSignal>(json, MaxBytes);
+            if (value == null ||
+                value.Version != 1 ||
+                string.IsNullOrEmpty(value.RoomId) ||
+                value.RoomId.Length > 64 ||
+                value.RoomId.Any(char.IsControl) ||
+                value.Revision == null ||
+                !Guid.TryParseExact(value.Revision, "N", out _) ||
+                string.IsNullOrWhiteSpace(value.Scene) ||
+                value.Scene.Length > 128 ||
+                value.Scene.Any(char.IsControl) ||
+                value.ObjectId < -1 ||
+                (value.Ready && (value.ObjectId < 0 || value.Missing)) ||
+                (value.Missing && (value.ObjectId < 0 || value.SceneId == 0)))
             {
                 return false;
             }
 
-            try
-            {
-                RoundSignal value = JsonSerializer.Deserialize<RoundSignal>(json);
-                if 
-                (
-                    value == null ||
-                    value.Version != 1 ||
-                    string.IsNullOrEmpty(value.RoomId) ||
-                    value.RoomId.Length > 64 ||
-                    value.RoomId.Any(char.IsControl) ||
-                    value.Revision == null ||
-                    !Guid.TryParseExact(value.Revision, "N", out _) ||
-                    string.IsNullOrWhiteSpace(value.Scene) ||
-                    value.Scene.Length > 128 ||
-                    value.Scene.Any(char.IsControl) ||
-                    value.ObjectId < -1 ||
-                    (value.Ready && (value.ObjectId < 0 || value.Missing)) ||
-                    (value.Missing && (value.ObjectId < 0 || value.SceneId == 0))
-                )
-                {
-                    return false;
-                }
+            signal = value;
 
-                signal = value;
-
-                return true;
-            }
-            catch (JsonException)
-            {
-                return false;
-            }
+            return true;
         }
     }
 }

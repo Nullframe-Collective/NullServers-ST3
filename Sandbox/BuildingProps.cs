@@ -1,4 +1,4 @@
-using Il2CppInterop.Runtime;
+﻿using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using UnityEngine;
 using Object = UnityEngine.Object;
@@ -17,26 +17,20 @@ namespace NullServers.Sandbox
 
         internal BuildingProps()
         {
-            Part Box(float x, float y, float z, float a, float b, float c) => new
-            (
+            Part Box(float x, float y, float z, float a, float b, float c) => new(
                 PrimitiveType.Cube,
                 new Vector3(x, y, z),
-                new Vector3(a, b, c)
-            );
+                new Vector3(a, b, c));
 
-            Part Ball(float x, float y, float z, float size) => new
-            (
+            Part Ball(float x, float y, float z, float size) => new(
                 PrimitiveType.Sphere,
                 new Vector3(x, y, z),
-                Vector3.one * size
-            );
+                Vector3.one * size);
 
-            Part Cylinder(float x, float y, float z, float radius, float height) => new
-            (
+            Part Cylinder(float x, float y, float z, float radius, float height) => new(
                 PrimitiveType.Cylinder,
                 new Vector3(x, y, z),
-                new Vector3(radius, height / 2f, radius)
-            );
+                new Vector3(radius, height / 2f, radius));
 
             _recipes["Crate"] =
             [
@@ -73,15 +67,13 @@ namespace NullServers.Sandbox
                 Box(0f, 1.35f, 0f, 2f, 0.3f, 0.35f)
             ];
 
-            _recipes["Stairs"] = Enumerable.Range(0, 6).Select(i => Box
-            (
+            _recipes["Stairs"] = Enumerable.Range(0, 6).Select(i => Box(
                 0f,
                 (i + 1) * 0.15f - 0.525f,
                 i * 0.4f - 1f,
                 2f,
                 (i + 1) * 0.3f,
-                0.4f
-            )).ToArray();
+                0.4f)).ToArray();
 
             _recipes["Fence"] =
             [
@@ -159,17 +151,8 @@ namespace NullServers.Sandbox
                 Box(0f, -0.1f, 1.8f, 1.4f, 0.8f, 0.25f)
             ];
 
-            _recipes["Pallet"] = Enumerable.Range(0, 5).Select
-            (
-                i => Box(i * 0.3f - 0.6f, 0.1f, 0f, 0.22f, 0.1f, 1.3f)
-            )
-            .Concat
-            (
-                [
-                    Box(-0.5f, 0f, 0f, 0.18f, 0.15f, 1.3f), 
-                    Box(0.5f, 0f, 0f, 0.18f, 0.15f, 1.3f)
-                ]
-            ).ToArray();
+            _recipes["Pallet"] = Enumerable.Range(0, 5).Select(i => Box(i * 0.3f - 0.6f, 0.1f, 0f, 0.22f, 0.1f, 1.3f))
+            .Concat([ Box(-0.5f, 0f, 0f, 0.18f, 0.15f, 1.3f), Box(0.5f, 0f, 0f, 0.18f, 0.15f, 1.3f) ]).ToArray();
 
             _recipes["Bridge"] =
             [
@@ -191,13 +174,11 @@ namespace NullServers.Sandbox
             _recipes["Hoop"] = Enumerable.Range(0, 12).Select(i =>
             {
                 float angle = i * 30f * Mathf.Deg2Rad;
-                return new Part
-                (
+                return new Part(
                         PrimitiveType.Cube,
                         new Vector3(Mathf.Cos(angle), Mathf.Sin(angle), 0f),
                         new Vector3(0.56f, 0.12f, 0.2f),
-                        new Vector3(0f, 0f, i * 30f + 90f)
-                );
+                        new Vector3(0f, 0f, i * 30f + 90f));
             }).ToArray();
         }
 
@@ -205,7 +186,7 @@ namespace NullServers.Sandbox
         {
             if (!_recipes.TryGetValue(name, out var parts)) return null;
 
-            if (!_meshes.TryGetValue(name, out var mesh))
+            if (!_meshes.TryGetValue(name, out var mesh) || !mesh)
             {
                 List<Vector3> vertices = new();
                 List<Vector3> normals = new();
@@ -224,15 +205,11 @@ namespace NullServers.Sandbox
 
                     Quaternion rotation = Quaternion.Euler(part.Angles);
                     vertices.AddRange(source.vertices.Select(point => rotation * Vector3.Scale(point, part.Size) + part.Position));
-                    normals.AddRange
-                    (
-                        source.normals.Select(normal => (rotation * new Vector3
-                        (
+                    normals.AddRange(
+                        source.normals.Select(normal => (rotation * new Vector3(
                             normal.x / part.Size.x,
                             normal.y / part.Size.y,
-                            normal.z / part.Size.z
-                        )
-                    ).normalized));
+                            normal.z / part.Size.z)).normalized));
 
                     uv.AddRange(source.uv);
                     triangles.AddRange(source.triangles.Select(value => value + offset));
@@ -250,12 +227,18 @@ namespace NullServers.Sandbox
                 };
 
                 mesh.RecalculateBounds();
+                mesh.hideFlags = HideFlags.DontUnloadUnusedAsset;
                 _meshes[name] = mesh;
             }
 
             GameObject root = new("Build");
             root.AddComponent(Il2CppType.Of<MeshFilter>()).Cast<MeshFilter>().sharedMesh = mesh;
-            _material ??= new Material(Shader.Find("Standard"));
+
+            if (!_material)
+            {
+                _material = new Material(Shader.Find("Standard")) { hideFlags = HideFlags.DontUnloadUnusedAsset };
+            }
+
             root.AddComponent(Il2CppType.Of<MeshRenderer>()).Cast<MeshRenderer>().sharedMaterial = _material;
 
             if (collision)

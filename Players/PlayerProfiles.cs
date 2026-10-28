@@ -10,6 +10,7 @@ using Il2CppFishNet.Transporting;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using MelonLoader;
 using MelonLoader.Utils;
+using NullServers.Content;
 using NullServers.Network;
 using NullServers.Room;
 using System.Text.Json;
@@ -27,6 +28,8 @@ namespace NullServers.Players
         private readonly Dictionary<IntPtr, (PlayerInfo Player, PlayerProfile Profile)> _playerProfiles = new();
         private readonly Dictionary<int, float> _lastSubmission = new();
         private readonly Dictionary<int, (string Account, string Nickname)> _forcedNames = new();
+        private readonly Dictionary<string, PlayerProfile> _chatProfiles = new();
+        private static PlayerProfile _drawingProfile;
         private readonly string _path = Path.Combine(MelonEnvironment.UserDataDirectory, "NullFrame", "profile.json");
         private NetworkManager _manager;
         private string _roomId;
@@ -35,6 +38,10 @@ namespace NullServers.Players
         private float _nextSubmit;
         private bool _protocolAvailable = true;
 
+        internal FrameworkCompatibility Compatibility { get; set; }
+        internal bool ProtocolAvailable => _protocolAvailable;
+        internal event Action<NetworkConnection, FrameworkMessage> FrameworkReceived;
+        internal event Action<FrameworkMessage> FrameworkReceivedFromHost;
         internal event Action<PlayerProfile> LocalChanged;
         internal event Action<NetworkConnection, RoundSignal> RoundSignalReceived;
         internal event Action<RoundSignal> RoundSignalReceivedFromServer;
@@ -42,6 +49,10 @@ namespace NullServers.Players
         internal event Action<ServerMessage> ServerMessageReceivedFromHost;
         internal event Action<NetworkConnection, SandboxMessage> SandboxReceived;
         internal event Action<SandboxMessage> SandboxReceivedFromHost;
+        internal event Action<NetworkConnection, HatPacket> HatsReceived;
+        internal event Action<NetworkConnection, ContentMessage> ContentReceived;
+        internal event Action<ContentMessage> ContentReceivedFromHost;
+        internal event Action<HatPacket> HatsReceivedFromHost;
 
         internal PlayerProfile Local { get; private set; } = PlayerProfile.Default;
 
@@ -53,7 +64,7 @@ namespace NullServers.Players
                                _session.Relay &&
                                _session.Relay.CurrentRoom != null;
 
-        internal PlayerProfiles(HarmonyLib.Harmony harmony, RelaySession session, MelonLogger.Instance logger = null)
+        internal PlayerProfiles(HarmonyLib.Harmony harmony, RelaySession session, MelonLogger.Instance logger)
         {
             _instance = this;
             _session = session;
@@ -66,13 +77,13 @@ namespace NullServers.Players
                     PlayerProfile saved = JsonSerializer.Deserialize<PlayerProfile>(File.ReadAllText(_path));
                     if (saved != null)
                     {
-                        Local = PlayerProfile.Normalize(saved.Nickname, saved.ColorHex);
+                        Local = PlayerProfile.Normalize(saved.Nickname, saved.ColorHex, saved.ColorMode, saved.GradientColor, saved.ColorSpeed);
                     }
                 }
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
             {
-                logger?.Warning($"Cannot load player profile: {exception.Message}");
+                logger.Warning($"Cannot load player profile: {exception.Message}");
             }
 
             harmony.Patch(
@@ -104,29 +115,45 @@ namespace NullServers.Players
                 postfix: new HarmonyMethod(typeof(PlayerProfiles), nameof(AfterChatName)));
 
             harmony.Patch(
-                AccessTools.Method(typeof(DrawPlayerName), nameof(DrawPlayerName.OnGUI)),
-                prefix: new HarmonyMethod(typeof(PlayerProfiles), nameof(BeforeDrawName)));
+                AccessTools.Method(typeof(WhoKilledWho), nameof(WhoKilledWho.DCIELGDLOAB)),
+                postfix: new HarmonyMethod(typeof(PlayerProfiles), nameof(AfterNoticeName)));
 
-            harmony.Patch
-            (
-                AccessTools.Method
-                (
+            harmony.Patch(
+                AccessTools.Method(typeof(DrawPlayerName), nameof(DrawPlayerName.OnGUI)),
+                prefix: new HarmonyMethod(typeof(PlayerProfiles), nameof(BeforeDrawName)),
+                finalizer: new HarmonyMethod(typeof(PlayerProfiles), nameof(AfterDrawName)));
+
+            harmony.Patch(
+                AccessTools.Method(typeof(GUI), nameof(GUI.Label), [typeof(Rect), typeof(string), typeof(GUIStyle)]),
+                prefix: new HarmonyMethod(typeof(PlayerProfiles), nameof(BeforeNameLabel)),
+                finalizer: new HarmonyMethod(typeof(PlayerProfiles), nameof(AfterNameLabel)));
+
+            harmony.Patch(
+                AccessTools.Method(
                     typeof(GUILayout),
                     nameof(GUILayout.Label),
                     [
                         typeof(string),
                         typeof(GUIStyle),
                         typeof(Il2CppReferenceArray<GUILayoutOption>)
-                    ]
-                ),
+                    ]),
                 prefix: new HarmonyMethod(typeof(PlayerProfiles), nameof(BeforeChatLabel)),
-                finalizer: new HarmonyMethod(typeof(PlayerProfiles), nameof(AfterChatLabel))
-            );
+                finalizer: new HarmonyMethod(typeof(PlayerProfiles), nameof(AfterChatLabel)));
         }
 
-        internal void Save(string nickname, string colorHex)
+        internal void Save(
+            string nickname,
+            string colorHex,
+            NameColorMode? colorMode = null,
+            string gradientColor = null,
+            float? colorSpeed = null)
         {
-            PlayerProfile profile = PlayerProfile.Normalize(nickname, colorHex);
+            PlayerProfile profile = PlayerProfile.Normalize(
+                nickname,
+                colorHex,
+                colorMode ?? Local.ColorMode,
+                gradientColor ?? Local.GradientColor,
+                colorSpeed ?? Local.ColorSpeed);
             if (profile.Matches(Local)) return;
 
             Local = profile;
@@ -140,7 +167,7 @@ namespace NullServers.Players
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                _logger?.Warning($"Cannot save player profile: {exception.Message}");
+                _logger.Warning($"Cannot save player profile: {exception.Message}");
             }
         }
 
@@ -161,12 +188,16 @@ namespace NullServers.Players
                 _playerProfiles.Remove(key);
             }
 
-            NetBootstrap bootstrap = NetBootstrap.GJDGDIGECJN;
-            NetworkManager manager = bootstrap ? bootstrap.HLNKMGIBPIG : null;
+            NetBootstrap bootstrap = NetBootstrap.Current;
+            NetworkManager manager = bootstrap ? bootstrap.Network : null;
             SetConnection(manager);
 
             int clientId = _localId;
-            if (clientId < 0) return;
+
+            if (clientId < 0 || Compatibility?.Ready != true)
+            {
+                return;
+            }
 
             if (manager.ServerManager.Started)
             {
@@ -182,11 +213,12 @@ namespace NullServers.Players
                 }
             }
 
-            PlayerProfile local = PlayerProfile.Normalize
-            (
+            PlayerProfile local = PlayerProfile.Normalize(
                 string.IsNullOrWhiteSpace(Local.Nickname) ? DefaultName : Local.Nickname,
-                Local.ColorHex
-            );
+                Local.ColorHex,
+                Local.ColorMode,
+                Local.GradientColor,
+                Local.ColorSpeed);
 
             if (Time.unscaledTime >= _nextSubmit &&
                 (!_profiles.TryGetValue(clientId, out var confirmed) ||
@@ -201,7 +233,8 @@ namespace NullServers.Players
         {
             if (manager && manager != _manager)
             {
-                _protocolAvailable = 
+                _protocolAvailable = !manager.ClientManager._broadcastHandlers.ContainsKey(FrameworkMessage.BroadcastId) &&
+                    !manager.ServerManager._broadcastHandlers.ContainsKey(FrameworkMessage.BroadcastId) &&
                     !manager.ClientManager._broadcastHandlers.ContainsKey(ProfilePacket.BroadcastId) &&
                     !manager.ServerManager._broadcastHandlers.ContainsKey(ProfilePacket.BroadcastId) &&
                     !manager.ClientManager._broadcastHandlers.ContainsKey(RoundSignal.BroadcastId) &&
@@ -209,19 +242,22 @@ namespace NullServers.Players
                     !manager.ClientManager._broadcastHandlers.ContainsKey(ServerMessage.BroadcastId) &&
                     !manager.ServerManager._broadcastHandlers.ContainsKey(ServerMessage.BroadcastId) &&
                     !manager.ClientManager._broadcastHandlers.ContainsKey(SandboxMessage.BroadcastId) &&
-                    !manager.ServerManager._broadcastHandlers.ContainsKey(SandboxMessage.BroadcastId);
+                    !manager.ServerManager._broadcastHandlers.ContainsKey(SandboxMessage.BroadcastId) &&
+                    !manager.ClientManager._broadcastHandlers.ContainsKey(HatPacket.BroadcastId) &&
+                    !manager.ServerManager._broadcastHandlers.ContainsKey(HatPacket.BroadcastId) &&
+                    !manager.ClientManager._broadcastHandlers.ContainsKey(ContentMessage.BroadcastId) &&
+                    !manager.ServerManager._broadcastHandlers.ContainsKey(ContentMessage.BroadcastId);
 
                 if (!_protocolAvailable)
                 {
-                    _logger?.Error("Player profile message identifier is already registered by another component.");
+                    _logger.Error("Player profile message identifier is already registered by another component.");
                 }
             }
 
             NetworkConnection connection = manager ? manager.ClientManager.Connection : null;
             string roomId = Active ? _session.Relay.CurrentRoom.Id : null;
 
-            int clientId = 
-                roomId != null &&
+            int clientId = roomId != null &&
                 manager &&
                 manager.ClientManager.Started &&
                 connection != null &&
@@ -235,6 +271,7 @@ namespace NullServers.Players
                 _playerProfiles.Clear();
                 _lastSubmission.Clear();
                 _forcedNames.Clear();
+                _chatProfiles.Clear();
                 _nextSubmit = 0f;
             }
 
@@ -250,19 +287,20 @@ namespace NullServers.Players
         {
             if (Active && _manager && _manager.ServerManager.Started)
             {
-                Send
-                (
-                    new ProfilePacket
-                    (
+                Send(
+                    new ProfilePacket(
                         1,
                         ProfilePacketKind.Snapshot,
                         _serverProfiles
                         .Where(pair => _manager.ServerManager.Clients.TryGetValue(pair.Key, out var connection) &&
                         connection.IsAuthenticated)
-                        .Select(pair => new ProfileEntry(pair.Key, pair.Value)).ToArray()
-                    )
-                );
+                        .Select(pair => new ProfileEntry(pair.Key, pair.Value)).ToArray()));
             }
+        }
+
+        internal void SendFramework(FrameworkMessage message, NetworkConnection target = null)
+        {
+            SendPacket(FrameworkMessage.BroadcastId, JsonSerializer.Serialize(message), target, target == null);
         }
 
         internal void SendRoundSignal(RoundSignal signal, NetworkConnection target = null)
@@ -275,23 +313,21 @@ namespace NullServers.Players
             SendPacket(ServerMessage.BroadcastId, JsonSerializer.Serialize(message), target, toServer);
         }
 
-        internal void SendSandbox
-        (
-            SandboxMessage message,
-            NetworkConnection target = null,
-            bool toServer = false,
-            Channel channel = Channel.Reliable
-        )
+        internal void SendContent(ContentMessage message, NetworkConnection target = null, bool toServer = false)
         {
-            SendPacket
-            (
-                SandboxMessage.BroadcastId,
-                JsonSerializer.Serialize(message, SandboxMessage.JsonOptions),
-                target,
-                toServer,
-                channel
-            );
+            SendPacket(ContentMessage.BroadcastId, JsonSerializer.Serialize(message), target, toServer);
         }
+
+        internal void SendHats(HatPacket packet, NetworkConnection target = null, bool toServer = false)
+        {
+            SendPacket(HatPacket.BroadcastId, JsonSerializer.Serialize(packet), target, toServer);
+        }
+
+        internal void SendSandbox(SandboxMessage message, NetworkConnection target = null, bool toServer = false, Channel channel = Channel.Reliable)
+            => SendSandboxJson(SandboxMessage.Serialize(message), target, toServer, channel);
+
+        internal void SendSandboxJson(string json, NetworkConnection target = null, bool toServer = false, Channel channel = Channel.Reliable)
+            => SendPacket(SandboxMessage.BroadcastId, json, target, toServer, channel);
 
         internal void ForceNickname(int id, string name)
         {
@@ -306,19 +342,17 @@ namespace NullServers.Players
 
             if (!_serverProfiles.TryGetValue(id, out var profile) || name == null) return;
 
-            _serverProfiles[id] = PlayerProfile.Normalize(name, profile.ColorHex);
+            _serverProfiles[id] = PlayerProfile.Normalize(name, profile.ColorHex, profile.ColorMode, profile.GradientColor, profile.ColorSpeed);
             RememberPlayers();
             Synchronize();
         }
 
-        private void SendPacket
-        (
+        private void SendPacket(
             ushort messageId,
             string json,
             NetworkConnection target,
             bool toServer,
-            Channel channel = Channel.Reliable
-        )
+            Channel channel = Channel.Reliable)
         {
             if (!_manager) return;
 
@@ -339,13 +373,11 @@ namespace NullServers.Players
                 }
                 else if (target != null)
                 {
-                    _manager.TransportManager.SendToClient
-                    (
+                    _manager.TransportManager.SendToClient(
                         (byte)channel,
                         writer.GetArraySegment(),
                         target,
-                        DataOrderType.Default
-                    );
+                        DataOrderType.Default);
                 }
                 else
                 {
@@ -353,13 +385,11 @@ namespace NullServers.Players
                     {
                         if (!client.IsAuthenticated) continue;
 
-                        _manager.TransportManager.SendToClient
-                        (
+                        _manager.TransportManager.SendToClient(
                             (byte)channel,
                             writer.GetArraySegment(),
                             client,
-                            DataOrderType.Default
-                        );
+                            DataOrderType.Default);
                     }
                 }
             }
@@ -394,7 +424,6 @@ namespace NullServers.Players
             if (reader.ReadUInt16() != messageId)
             {
                 reader.Position = position;
-
                 return false;
             }
 
@@ -404,13 +433,13 @@ namespace NullServers.Players
                 if (length < 1 || length > maxBytes || length > reader.Remaining)
                 {
                     reader.Skip(reader.Remaining);
-
                     return true;
                 }
 
                 int end = reader.Position + length;
                 int textPosition = reader.Position;
                 int textLength = reader.ReadInt32();
+
                 if (textLength > 0 && textLength <= end - reader.Position)
                 {
                     reader.Position = textPosition;
@@ -426,73 +455,150 @@ namespace NullServers.Players
                     reader.Skip(reader.Remaining);
                 }
 
-                _instance._logger?.Warning($"Invalid player profile packet: {exception.Message}");
+                _instance._logger.Warning($"Invalid NullFrame packet 0x{messageId:X4}: {exception.Message}");
             }
 
             return true;
         }
 
-        private static bool BeforeServerBroadcast
-        (
-            ServerManager __instance, 
-            PooledReader reader, 
-            NetworkConnection conn, 
-            Channel channel
-        )
+        private bool ReadMessages(PooledReader reader, Channel channel, NetworkConnection connection, bool fromHost)
+        {
+            if (!Active) return false;
+
+            if (channel == Channel.Reliable &&
+                ReadJson(reader, FrameworkMessage.BroadcastId, FrameworkMessage.MaxBytes, out var frameworkJson))
+            {
+                if ((fromHost ||
+                    connection != null &&
+                    connection.IsAuthenticated) &&
+                    FrameworkMessage.TryParse(frameworkJson, out var framework))
+                {
+                    if (fromHost)
+                    {
+                        FrameworkReceivedFromHost?.Invoke(framework);
+                    }
+                    else
+                    {
+                        FrameworkReceived?.Invoke(connection, framework);
+                    }
+                }
+
+                return true;
+            }
+
+            if (channel == Channel.Reliable && ReadJson(reader, ContentMessage.BroadcastId, ContentMessage.MaxBytes, out var contentJson))
+            {
+                if ((fromHost || connection != null && connection.IsAuthenticated) && ContentMessage.TryParse(contentJson, out var content))
+                {
+                    if (fromHost)
+                    {
+                        ContentReceivedFromHost?.Invoke(content);
+                    }
+                    else
+                    {
+                        ContentReceived?.Invoke(connection, content);
+                    }
+                }
+
+                return true;
+            }
+
+            bool allowed = fromHost ? Compatibility?.Ready == true : Compatibility?.Allows(connection) == true;
+
+            if (ReadJson(reader, SandboxMessage.BroadcastId, SandboxMessage.MaxBytes, out var sandboxJson))
+            {
+                if (allowed &&
+                    SandboxMessage.TryParse(sandboxJson, out var sandbox) &&
+                    sandbox.AllowsChannel(fromHost, channel == Channel.Reliable))
+                {
+                    if (fromHost)
+                    {
+                        SandboxReceivedFromHost?.Invoke(sandbox);
+                    }
+                    else
+                    {
+                        SandboxReceived?.Invoke(connection, sandbox);
+                    }
+                }
+
+                return true;
+            }
+
+            if (channel != Channel.Reliable) return false;
+
+            if (ReadJson(reader, HatPacket.BroadcastId, HatPacket.MaxBytes, out var hatsJson))
+            {
+                if (allowed && HatPacket.TryParse(hatsJson, out var hats))
+                {
+                    if (fromHost)
+                    {
+                        HatsReceivedFromHost?.Invoke(hats);
+                    }
+                    else
+                    {
+                        HatsReceived?.Invoke(connection, hats);
+                    }
+                }
+
+                return true;
+            }
+
+            if (ReadJson(reader, ServerMessage.BroadcastId, ServerMessage.MaxBytes, out var controlJson))
+            {
+                if (allowed && ServerMessage.TryParse(controlJson, out var message))
+                {
+                    if (fromHost)
+                    {
+                        ServerMessageReceivedFromHost?.Invoke(message);
+                    }
+                    else
+                    {
+                        ServerMessageReceived?.Invoke(connection, message);
+                    }
+                }
+
+                return true;
+            }
+
+            if (ReadJson(reader, RoundSignal.BroadcastId, RoundSignal.MaxBytes, out var json))
+            {
+                if ((fromHost || connection != null && connection.IsAuthenticated) && RoundSignal.TryParse(json, out var signal))
+                {
+                    if (fromHost)
+                    {
+                        RoundSignalReceivedFromServer?.Invoke(signal);
+                    }
+                    else
+                    {
+                        RoundSignalReceived?.Invoke(connection, signal);
+                    }
+                }
+
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool BeforeServerBroadcast(
+            ServerManager __instance,
+            PooledReader reader,
+            NetworkConnection conn,
+            Channel channel)
         {
             PlayerProfiles instance = _instance;
-            if (instance.Active && ReadJson(reader, SandboxMessage.BroadcastId, SandboxMessage.MaxBytes, out var sandboxJson))
-            {
-                if 
-                (
-                    conn != null &&
-                    conn.IsAuthenticated &&
-                    SandboxMessage.TryParse(sandboxJson, out var sandbox) &&
-                    (channel == Channel.Reliable || sandbox.Kind == SandboxKind.GunAim)
-                )
-                {
-                    instance.SandboxReceived?.Invoke(conn, sandbox);
-                }
-
-                return false;
-            }
-
-            if 
-            (
-                channel == Channel.Reliable &&
-                instance.Active &&
-                ReadJson(reader, ServerMessage.BroadcastId, ServerMessage.MaxBytes, out var controlJson)
-            )
-            {
-                if (conn != null && conn.IsAuthenticated && ServerMessage.TryParse(controlJson, out var message))
-                {
-                    instance.ServerMessageReceived?.Invoke(conn, message);
-                }
-
-                return false;
-            }
-
-            if 
-            (
-                channel == Channel.Reliable &&
-                instance.Active &&
-                ReadJson(reader, RoundSignal.BroadcastId, RoundSignal.MaxBytes, out var json)
-            )
-            {
-                if (conn != null && conn.IsAuthenticated && RoundSignal.TryParse(json, out var signal))
-                {
-                    instance.RoundSignalReceived?.Invoke(conn, signal);
-                }
-
-                return false;
-            }
+            if (instance.ReadMessages(reader, channel, conn, fromHost: false)) return false;
 
             if (channel != Channel.Reliable || !instance.Active || !Read(reader, out var packet))
             {
                 return true;
             }
 
-            if (packet == null || conn == null || !conn.IsAuthenticated || packet.Kind != ProfilePacketKind.Profile)
+            if (packet == null ||
+                conn == null ||
+                !conn.IsAuthenticated ||
+                instance.Compatibility?.Allows(conn) != true ||
+                packet.Kind != ProfilePacketKind.Profile)
             {
                 return false;
             }
@@ -511,7 +617,7 @@ namespace NullServers.Players
             {
                 if (instance._session.Relay.TryGetPlayerIdentity(id, out var identity) && identity.Username == forced.Account)
                 {
-                    profile = PlayerProfile.Normalize(forced.Nickname, profile.ColorHex);
+                    profile = PlayerProfile.Normalize(forced.Nickname, profile.ColorHex, profile.ColorMode, profile.GradientColor, profile.ColorSpeed);
                 }
                 else
                 {
@@ -521,20 +627,16 @@ namespace NullServers.Players
 
             instance._serverProfiles[id] = profile;
             instance.RememberPlayers();
-            instance.Send
-            (
-                new ProfilePacket
-                (
+            instance.Send(
+                new ProfilePacket(
                     1,
                     ProfilePacketKind.Snapshot,
                     instance._serverProfiles.Where(pair => __instance.Clients.ContainsKey(pair.Key))
-                    .Select(pair => new ProfileEntry(pair.Key, pair.Value)).ToArray()
-                ),
-                conn
-            );
+                    .Select(pair => new ProfileEntry(pair.Key, pair.Value)).ToArray()),
+                conn);
 
             instance.Send(ProfilePacket.Update(id, profile));
-            instance._logger?.Msg($"Player profile accepted. Client: {id}; Nickname: {profile.Nickname}; Color: {profile.ColorHex}.");
+            instance._logger.Msg($"Player profile accepted. Client: {id}; Nickname: {profile.Nickname}; Color: {profile.ColorHex}.");
 
             return false;
         }
@@ -542,56 +644,17 @@ namespace NullServers.Players
         private static bool BeforeClientBroadcast(ClientManager __instance, PooledReader reader, Channel channel)
         {
             PlayerProfiles instance = _instance;
-            if (instance.Active && ReadJson(reader, SandboxMessage.BroadcastId, SandboxMessage.MaxBytes, out var sandboxJson))
-            {
-                if
-                (
-                    SandboxMessage.TryParse(sandboxJson, out var sandbox) &&
-                    (channel == Channel.Reliable ||
-                    sandbox.Kind is SandboxKind.Pose or SandboxKind.PoseBatch or SandboxKind.GunState)
-                )
-                {
-                    instance.SandboxReceivedFromHost?.Invoke(sandbox);
-                }
-
-                return false;
-            }
-
-            if 
-            (
-                channel == Channel.Reliable &&
-                instance.Active &&
-                ReadJson(reader, ServerMessage.BroadcastId, ServerMessage.MaxBytes, out var controlJson)
-            )
-            {
-                if (ServerMessage.TryParse(controlJson, out var message))
-                {
-                    instance.ServerMessageReceivedFromHost?.Invoke(message);
-                }
-
-                return false;
-            }
-
-            if 
-            (
-                channel == Channel.Reliable &&
-                instance.Active &&
-                ReadJson(reader, RoundSignal.BroadcastId, RoundSignal.MaxBytes, out var json))
-            {
-                if (RoundSignal.TryParse(json, out var signal))
-                {
-                    instance.RoundSignalReceivedFromServer?.Invoke(signal);
-                }
-
-                return false;
-            }
+            if (instance.ReadMessages(reader, channel, null, fromHost: true)) return false;
 
             if (channel != Channel.Reliable || !instance.Active || !Read(reader, out var packet))
             {
                 return true;
             }
 
-            if (packet == null) return false;
+            if (packet == null || instance.Compatibility?.Ready != true)
+            {
+                return false;
+            }
 
             instance.SetConnection(__instance.NetworkManager);
 
@@ -616,7 +679,7 @@ namespace NullServers.Players
             instance.RememberPlayers();
             if (instance._profiles.TryGetValue(instance._localId, out var local) && !local.Matches(previous))
             {
-                instance._logger?.Msg($"Player profile synchronized. Client: {instance._localId}; Nickname: {local.Nickname}; Color: {local.ColorHex}.");
+                instance._logger.Msg($"Player profile synchronized. Client: {instance._localId}; Nickname: {local.Nickname}; Color: {local.ColorHex}.");
             }
 
             return false;
@@ -629,17 +692,31 @@ namespace NullServers.Players
             __result = profile.Nickname;
         }
 
+        private static void AfterNoticeName(ref string __result)
+        {
+            PlayerProfiles profiles = _instance;
+            if (!profiles.Active) return;
+
+            PlayerProfile profile = profiles.Local;
+            if (!string.IsNullOrWhiteSpace(profile.Nickname))
+            {
+                __result = profile.Nickname;
+            }
+        }
+
         private void RememberPlayers()
         {
-            foreach (PlayerInfo player in UnityEngine.Object.FindObjectsOfType<PlayerInfo>())
+            foreach (IntPtr key in _playerProfiles.Keys.ToArray())
             {
-                if (!_serverProfiles.TryGetValue(player.COJDPMKCLCM, out var profile) ||
-                    !_profiles.TryGetValue(player.COJDPMKCLCM, out profile))
+                PlayerInfo player = _playerProfiles[key].Player;
+                if (player && _profiles.TryGetValue(player.ClientId, out var profile))
                 {
-                    continue;
+                    _playerProfiles[key] = (player, profile);
                 }
-
-                _playerProfiles[player.Pointer] = (player, profile);
+                else
+                {
+                    _playerProfiles.Remove(key);
+                }
             }
         }
 
@@ -650,11 +727,10 @@ namespace NullServers.Players
             if (_session.IsNullFrame && !_session.IsSwitching && _playerProfiles.TryGetValue(player.Pointer, out var cached))
             {
                 profile = cached.Profile;
-
                 return true;
             }
 
-            if (!TryGet(player.COJDPMKCLCM, out profile)) return false;
+            if (!TryGet(player.ClientId, out profile)) return false;
 
             _playerProfiles[player.Pointer] = (player, profile);
 
@@ -663,7 +739,7 @@ namespace NullServers.Players
 
         private static void AfterPlayerStarted(PlayerInfo __instance)
         {
-            if (!_instance.TryGet(__instance.COJDPMKCLCM, out var profile)) return;
+            if (!_instance.TryGet(__instance.ClientId, out var profile)) return;
 
             _instance._playerProfiles[__instance.Pointer] = (__instance, profile);
         }
@@ -672,7 +748,7 @@ namespace NullServers.Players
         {
             if (!_instance.TryPlayerProfile(__instance, out var profile)) return;
 
-            ColorUtility.TryParseHtmlString(profile.ColorHex, out __result);
+            ColorUtility.TryParseHtmlString(profile.CurrentColor, out __result);
         }
 
         private static void AfterHasPlayerColor(PlayerInfo __instance, ref bool __result)
@@ -688,70 +764,82 @@ namespace NullServers.Players
             if (_instance.TryGet(__0, out var profile))
             {
                 __result = profile.RichName;
+                if (_instance._chatProfiles.Count >= 1024)
+                {
+                    _instance._chatProfiles.Clear();
+                }
+
+                _instance._chatProfiles[__result] = profile;
             }
         }
 
-        private static void BeforeChatLabel(ref string __0, GUIStyle __1, out Color? __state)
+        private static void BeforeChatLabel(ref string __0, GUIStyle __1, out (bool Active, bool RichText, Color Color) __state)
         {
-            const string prefix = "  <color=";
-            const string suffix = "</color>: ";
-            const int colorLength = 7;
-            int nameStart = prefix.Length + colorLength + 1;
-
-            __state = null;
-
-            if 
-            (
-                __0 == null ||
-                __0.Length <= nameStart + suffix.Length ||
-                !__0.StartsWith(prefix, StringComparison.Ordinal) ||
-                __0[prefix.Length] != '#' ||
-                __0[nameStart - 1] != '>' ||
-                !__0.EndsWith(suffix, StringComparison.Ordinal) ||
-                !_instance.Active ||
-                __1 == null
-            )
+            __state = default;
+            if (__0 == null || __0.Length < 4 || !__0.StartsWith("  ", StringComparison.Ordinal) ||
+                !__0.EndsWith(": ", StringComparison.Ordinal) || !_instance.Active || __1 == null)
             {
                 return;
             }
 
-            MultiplayerChat chat = MultiplayerChat.CFNPNLGIHMH;
-            if 
-            (
-                !chat ||
-                chat.JELNPHBIKHK == null ||
-                __1.Pointer != chat.JELNPHBIKHK.Pointer ||
-                !ColorUtility.TryParseHtmlString(__0.Substring(prefix.Length, colorLength), out var color)
-            )
+            MultiplayerChat chat = MultiplayerChat.Current;
+            if (!chat ||
+                chat.NameStyle == null ||
+                __1.Pointer != chat.NameStyle.Pointer ||
+                !_instance._chatProfiles.TryGetValue(__0[2..^2], out var profile))
             {
                 return;
             }
 
-            // The native style is shared with the input and message body, which must keep treating tags as text.
-            __0 = string.Concat("  ", __0.AsSpan(nameStart, __0.Length - nameStart - suffix.Length), ": ");
-            __state = GUI.color;
-
-            GUI.color = color;
+            __0 = "  " + profile.RichName + ": ";
+            __state = (true, __1.richText, GUI.color);
+            __1.richText = true;
+            GUI.color = Color.white;
         }
 
-        private static void AfterChatLabel(Color? __state)
+        private static void AfterChatLabel(GUIStyle __1, (bool Active, bool RichText, Color Color) __state)
         {
-            if (!__state.HasValue) return;
+            if (!__state.Active) return;
 
-            GUI.color = __state.Value;
+            __1.richText = __state.RichText;
+            GUI.color = __state.Color;
         }
+
+        private static void BeforeNameLabel(ref string __1, GUIStyle __2, out (bool Active, bool RichText, Color Color) __state)
+        {
+            __state = default;
+            if (_drawingProfile == null || __1 != _drawingProfile.Nickname || __2 == null) return;
+
+            __state = (true, __2.richText, GUI.color);
+            __1 = _drawingProfile.RichName;
+            __2.richText = true;
+            GUI.color = Color.white;
+        }
+
+        private static void AfterNameLabel(GUIStyle __2, (bool Active, bool RichText, Color Color) __state)
+        {
+            if (!__state.Active) return;
+
+            __2.richText = __state.RichText;
+            GUI.color = __state.Color;
+        }
+
+        private static void AfterDrawName() => _drawingProfile = null;
 
         private static void BeforeDrawName(DrawPlayerName __instance)
         {
-            PlayerNetworkController controller = __instance.JGOGBDGJKAG;
+            _drawingProfile = null;
+            PlayerNetworkController controller = __instance.Player;
+
             if (controller && _instance.TryGet(controller.OwnerId, out var profile))
             {
-                __instance.DJHKBCAIADF = profile.Nickname;
-                controller.DJHKBCAIADF = profile.Nickname;
-                controller.AJGABBOMGJB = true;
+                _drawingProfile = profile;
+                __instance.DisplayName = profile.Nickname;
+                controller.DisplayName = profile.Nickname;
+                controller.HasNameColor = true;
 
-                ColorUtility.TryParseHtmlString(profile.ColorHex, out Color color);
-                controller.NDHICLFEEKL = color;
+                ColorUtility.TryParseHtmlString(profile.CurrentColor, out Color color);
+                controller.NameColor = color;
             }
         }
     }
