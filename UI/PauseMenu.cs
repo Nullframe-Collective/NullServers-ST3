@@ -49,105 +49,29 @@ namespace NullServers.UI
         internal void Update()
         {
             RoomMultiplayerMenu current = RoomMultiplayerMenu.Current;
-            if (current != Menu ||
-                !_session.IsNullFrame ||
-                _session.IsSwitching ||
-                !_session.Relay ||
-                _session.Relay.CurrentRoom == null)
+            bool inRoom = _session.IsNullFrame && !_session.IsSwitching && _session.Relay && _session.Relay.CurrentRoom != null;
+
+            if (current != Menu || !inRoom)
             {
-                Restore(_owner);
-
-                foreach (Entry entry in _entries)
-                {
-                    if (entry.Button)
-                    {
-                        UnityEngine.Object.Destroy(entry.Button.gameObject);
-                    }
-                }
-
-                foreach (var pair in _original)
-                {
-                    if (pair.Key)
-                    {
-                        pair.Key.anchoredPosition = pair.Value.Position;
-                        pair.Key.sizeDelta = pair.Value.Size;
-                    }
-                }
-
-                _original.Clear();
-                _settings = null;
-                _group = null;
+                RemoveButtons();
                 Menu = current;
             }
 
-            if (!_session.IsNullFrame ||
-                _session.IsSwitching ||
-                !current ||
-                !_session.Relay ||
-                _session.Relay.CurrentRoom == null)
-            {
-                return;
-            }
+            if (!inRoom || !current) return;
 
             if (!_settings)
             {
                 if (Time.unscaledTime < _nextScan) return;
 
                 _nextScan = Time.unscaledTime + 1f;
-
-                Button[] buttons = UnityEngine.Object.FindObjectsOfType<Button>(true)
-                    .Where(button => button.gameObject.scene == current.gameObject.scene).ToArray();
-
-                _settings = buttons.FirstOrDefault(button => button.gameObject.name == "Settings" ||
-                    FindText(button)?.text?.Trim().Equals("Settings", StringComparison.OrdinalIgnoreCase) == true);
-
-                if (!_settings) return;
-
-                while (_settings.transform.parent?.GetComponent(Il2CppType.Of<Button>())?.Cast<Button>() is { } parentButton)
-                {
-                    _settings = parentButton;
-                }
-
-                Transform parent = _settings.transform.parent;
-
-                _resume = buttons.FirstOrDefault(button => button.transform.parent == parent &&
-                    FindText(button)?.text?.Trim().Equals("Resume", StringComparison.OrdinalIgnoreCase) == true)?.transform.Cast<RectTransform>();
-
-                _quit = buttons.FirstOrDefault(button => button.transform.parent == parent &&
-                    FindText(button)?.text?.Trim().Equals("Quit", StringComparison.OrdinalIgnoreCase) == true)?.transform.Cast<RectTransform>();
-
-                foreach (RectTransform rect in new[]
-                {
-                    _resume,
-                    _quit,
-                    _settings.transform.Cast<RectTransform>()
-                })
-                {
-                    if (rect)
-                    {
-                        _original[rect] = (rect.anchoredPosition, rect.sizeDelta);
-                    }
-                }
-
-                _group = parent.GetComponent(Il2CppType.Of<CanvasGroup>())?.Cast<CanvasGroup>() ??
-                    parent.gameObject.AddComponent(Il2CppType.Of<CanvasGroup>()).Cast<CanvasGroup>();
-
-                foreach (Entry entry in _entries)
-                {
-                    entry.Button = CreateButton(_settings, entry);
-                }
-
-                Layout();
+                if (!AttachToPauseMenu(current)) return;
             }
 
             bool changed = false;
             foreach (Entry entry in _entries)
             {
                 bool visible = entry.Visible();
-                if (!entry.Button || entry.Button.gameObject.activeSelf == visible)
-                {
-                    continue;
-                }
+                if (!entry.Button || entry.Button.gameObject.activeSelf == visible) continue;
 
                 entry.Button.gameObject.SetActive(visible);
                 changed = true;
@@ -158,6 +82,73 @@ namespace NullServers.UI
                 Layout();
             }
         }
+
+        private void RemoveButtons()
+        {
+            Restore(_owner);
+
+            foreach (Entry entry in _entries)
+            {
+                if (entry.Button)
+                {
+                    UnityEngine.Object.Destroy(entry.Button.gameObject);
+                }
+            }
+
+            foreach (var pair in _original)
+            {
+                if (pair.Key)
+                {
+                    pair.Key.anchoredPosition = pair.Value.Position;
+                    pair.Key.sizeDelta = pair.Value.Size;
+                }
+            }
+
+            _original.Clear();
+            _settings = null;
+            _group = null;
+        }
+
+        // Finds the game's Settings, Resume and Quit buttons and adds our own buttons next to them.
+        private bool AttachToPauseMenu(RoomMultiplayerMenu current)
+        {
+            Button[] buttons = UnityEngine.Object.FindObjectsOfType<Button>(true)
+                .Where(button => button.gameObject.scene == current.gameObject.scene).ToArray();
+
+            _settings = buttons.FirstOrDefault(button => button.gameObject.name == "Settings" || HasText(button, "Settings"));
+            if (!_settings) return false;
+
+            while (_settings.transform.parent?.GetComponent(Il2CppType.Of<Button>())?.Cast<Button>() is { } parentButton)
+            {
+                _settings = parentButton;
+            }
+
+            Transform parent = _settings.transform.parent;
+            _resume = buttons.FirstOrDefault(button => button.transform.parent == parent && HasText(button, "Resume"))?.transform.Cast<RectTransform>();
+            _quit = buttons.FirstOrDefault(button => button.transform.parent == parent && HasText(button, "Quit"))?.transform.Cast<RectTransform>();
+
+            foreach (RectTransform rect in new[] { _resume, _quit, _settings.transform.Cast<RectTransform>() })
+            {
+                if (rect)
+                {
+                    _original[rect] = (rect.anchoredPosition, rect.sizeDelta);
+                }
+            }
+
+            _group = parent.GetComponent(Il2CppType.Of<CanvasGroup>())?.Cast<CanvasGroup>() ??
+                parent.gameObject.AddComponent(Il2CppType.Of<CanvasGroup>()).Cast<CanvasGroup>();
+
+            foreach (Entry entry in _entries)
+            {
+                entry.Button = CreateButton(_settings, entry);
+            }
+
+            Layout();
+            return true;
+        }
+
+        private static bool HasText(Button button, string text) =>
+            FindText(button)?.text?.Trim().Equals(text, StringComparison.OrdinalIgnoreCase) == true;
 
         private void Layout()
         {

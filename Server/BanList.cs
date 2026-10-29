@@ -69,7 +69,7 @@ namespace NullServers.Server
                 Nickname = nickname,
                 CreatedAt = DateTimeOffset.UtcNow
             };
-            var next = _entries.Append(entry).ToList();
+            List<BanEntry> next = _entries.Append(entry).ToList();
 
             return Save(next, out error);
         }

@@ -1,8 +1,6 @@
-﻿using HarmonyLib;
-using Il2Cpp;
+﻿using Il2Cpp;
 using Il2CppFishNet.Connection;
 using Il2CppFishNet.Object;
-using Il2CppInterop.Runtime;
 using NullServers.Customization;
 using NullServers.Network;
 using UnityEngine;
@@ -41,45 +39,20 @@ namespace NullServers.Sandbox
         private RagdollSkin _sourceSkin;
         private bool _creatingLiving;
 
-        internal RagdollSync(HarmonyLib.Harmony harmony, SandboxWorld world)
+        internal RagdollSync(SandboxWorld world)
         {
             _instance = this;
             _world = world;
-
-            harmony.Patch(
-                AccessTools.Method(typeof(RagdollController), nameof(RagdollController.Awake)),
-                postfix: new HarmonyMethod(typeof(RagdollSync), nameof(Created)));
-
-            harmony.Patch(
-                AccessTools.Method(typeof(RagdollController), "Start"),
-                prefix: new HarmonyMethod(typeof(RagdollSync), nameof(BeforeFreeze)));
-
-            harmony.Patch(
-                AccessTools.Method(typeof(RagdollMode), nameof(RagdollMode.OnEnable)),
-                prefix: new HarmonyMethod(typeof(RagdollSync), nameof(BeforeEnable)));
-
-            harmony.Patch(
-                AccessTools.Method(typeof(WaitForDestroy), nameof(WaitForDestroy.Awake)),
-                prefix: new HarmonyMethod(typeof(RagdollSync), nameof(BeforeCorpseTimer)));
-
-            harmony.Patch(
-                AccessTools.Method(typeof(DeadBot), nameof(DeadBot.Start)),
-                prefix: new HarmonyMethod(typeof(RagdollSync), nameof(BeforeDeadBot)));
-
-            harmony.Patch(
-                AccessTools.Method(typeof(PlayerDamage), nameof(PlayerDamage.KDDDGBFEFOC)),
-                prefix: new HarmonyMethod(typeof(RagdollSync), nameof(BeforeDeath)),
-                finalizer: new HarmonyMethod(typeof(RagdollSync), nameof(AfterDeath)));
         }
 
-        private static void BeforeDeath(PlayerDamage __instance, out (int Player, RagdollSkin Skin) __state)
+        internal static void BeforeDeath(PlayerDamage __instance, out (int Player, RagdollSkin Skin) __state)
         {
             __state = (_instance._sourcePlayer, _instance._sourceSkin);
             _instance._sourcePlayer = SandboxWorld.DamageOwner(__instance);
             _instance._sourceSkin = _instance._world.Active ? RagdollSkin.Capture(_instance._sourcePlayer, __instance) : null;
         }
 
-        private static Exception AfterDeath(PlayerDamage __instance, Exception __exception, (int Player, RagdollSkin Skin) __state)
+        internal static Exception AfterDeath(PlayerDamage __instance, Exception __exception, (int Player, RagdollSkin Skin) __state)
         {
             try
             {
@@ -97,7 +70,7 @@ namespace NullServers.Sandbox
             return __exception;
         }
 
-        private static void Created(RagdollController __instance)
+        internal static void Created(RagdollController __instance)
         {
             if (_instance._world.Active)
             {
@@ -105,9 +78,9 @@ namespace NullServers.Sandbox
             }
         }
 
-        private static bool BeforeFreeze() => !_instance._world.Active;
+        internal static bool BeforeFreeze() => !_instance._world.Active;
 
-        private static bool BeforeEnable(RagdollMode __instance)
+        internal static bool BeforeEnable(RagdollMode __instance)
         {
             RagdollSync sync = _instance;
             if (!sync._world.Active) return true;
@@ -170,7 +143,7 @@ namespace NullServers.Sandbox
             return false;
         }
 
-        private static bool BeforeCorpseTimer(WaitForDestroy __instance)
+        internal static bool BeforeCorpseTimer(WaitForDestroy __instance)
         {
             RagdollSync sync = _instance;
             GameObject root = __instance.gameObject;
@@ -181,7 +154,7 @@ namespace NullServers.Sandbox
             return false;
         }
 
-        private static bool BeforeDeadBot(DeadBot __instance)
+        internal static bool BeforeDeadBot(DeadBot __instance)
         {
             RagdollSync sync = _instance;
             if (!sync._world.Active) return true;
@@ -299,7 +272,7 @@ namespace NullServers.Sandbox
                 renderer.enabled = false;
             }
 
-            var physical = root.GetComponentsInChildren<Transform>(true).GroupBy(node => node.name)
+            Dictionary<string, Transform> physical = root.GetComponentsInChildren<Transform>(true).GroupBy(node => node.name)
                 .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
             GameObject visual = SandboxAssets.CloneVisual(model.gameObject, "NullFrameBodyModel");
             visual.transform.SetParent(root.transform, false);
@@ -335,7 +308,7 @@ namespace NullServers.Sandbox
             GameObject root = PrepareLivingBody(prefab, source, player);
             root.transform.SetPositionAndRotation(source.transform.position, source.transform.rotation);
             root.transform.localScale = source.transform.lossyScale;
-            var sourceBones = source.GetComponentsInChildren<Transform>(true).GroupBy(value => value.name).ToDictionary(group => group.Key, group => group.First());
+            Dictionary<string, Transform> sourceBones = source.GetComponentsInChildren<Transform>(true).GroupBy(value => value.name).ToDictionary(group => group.Key, group => group.First());
 
             foreach (Rigidbody part in root.GetComponentsInChildren<Rigidbody>(true))
             {
@@ -376,6 +349,8 @@ namespace NullServers.Sandbox
             return id > 0;
         }
 
+        // Every ragdoll that appears in the scene is registered here. The host publishes it,
+        // clients drop their own copy of a ragdoll once the game spawns the real one.
         internal void Register(GameObject root, int npc = -1)
         {
             if (!root || !root.scene.IsValid() || _local.ContainsKey(root.Pointer)) return;
@@ -383,45 +358,62 @@ namespace NullServers.Sandbox
             Rigidbody[] physics = root.GetComponentsInChildren<Rigidbody>(true).ToArray();
             if (physics.Length is < 1 or > 64) return;
 
-            if (_world.IsHost && _bodies.Count >= 512)
-            {
-                var oldest = _bodies.Where(pair => !pair.Value.Definition.Living && !_world.Hands.HeldObjects.Contains(pair.Key))
-                    .OrderBy(pair => pair.Value.CreatedAt).FirstOrDefault();
-                if (oldest.Value == null) return;
-
-                Remove(oldest.Key);
-                _world.Send(_world.Message(SandboxKind.RemoveRagdoll) with { Id = oldest.Key });
-                _world.SetStatus("Ragdoll limit reached: the oldest unheld corpse was removed (512 per room).");
-            }
+            if (_world.IsHost && _bodies.Count >= 512 && !RemoveOldestCorpse()) return;
 
             _local[root.Pointer] = root;
             _players[root.Pointer] = _sourcePlayer;
 
-            if (!_world.IsHost)
+            if (_world.IsHost)
             {
-                foreach (Body copy in _bodies.Values.Where(body => body.Copy &&
-                    body.Root &&
-                    body.Definition.Name == root.name.Replace("(Clone)", "").Trim() &&
-                    (body.Definition.Player < 0 || body.Definition.Player == _sourcePlayer) &&
-                    Vector3.Distance(root.transform.position, SandboxWorld.Vector(body.Definition.Position)) < 8f))
-                {
-                    _bound.Remove(copy.Root.Pointer);
-                    copy.Visual?.Dispose();
-                    copy.Visual = null;
-                    Object.Destroy(copy.Root);
-                    copy.Root = null;
-                    copy.Bones = null;
-                    copy.Copy = false;
-                }
-
-                return;
+                Publish(root, physics, npc);
             }
+            else
+            {
+                DropCopiesOf(root);
+            }
+        }
 
+        private static string BodyName(GameObject root) => root.name.Replace("(Clone)", "").Trim();
+
+        // A room keeps up to 512 ragdolls. Living ragdolls and held corpses are never removed.
+        private bool RemoveOldestCorpse()
+        {
+            var oldest = _bodies.Where(pair => !pair.Value.Definition.Living && !_world.Hands.HeldObjects.Contains(pair.Key))
+                .OrderBy(pair => pair.Value.CreatedAt).FirstOrDefault();
+            if (oldest.Value == null) return false;
+
+            Remove(oldest.Key);
+            _world.Send(_world.Message(SandboxKind.RemoveRagdoll) with { Id = oldest.Key });
+            _world.SetStatus("Ragdoll limit reached: the oldest unheld corpse was removed (512 per room).");
+            return true;
+        }
+
+        private void DropCopiesOf(GameObject root)
+        {
+            string name = BodyName(root);
+            foreach (Body copy in _bodies.Values.Where(body => body.Copy &&
+                body.Root &&
+                body.Definition.Name == name &&
+                (body.Definition.Player < 0 || body.Definition.Player == _sourcePlayer) &&
+                Vector3.Distance(root.transform.position, SandboxWorld.Vector(body.Definition.Position)) < 8f))
+            {
+                _bound.Remove(copy.Root.Pointer);
+                copy.Visual?.Dispose();
+                copy.Visual = null;
+                Object.Destroy(copy.Root);
+                copy.Root = null;
+                copy.Bones = null;
+                copy.Copy = false;
+            }
+        }
+
+        private void Publish(GameObject root, Rigidbody[] physics, int npc)
+        {
             string[] paths = physics.Select(body => Path(root.transform, body.transform)).ToArray();
 
             RagdollDefinition definition = new(
                 _nextId++,
-                root.name.Replace("(Clone)", "").Trim(),
+                BodyName(root),
                 SandboxWorld.Point(root.transform.position),
                 paths,
                 _sourcePlayer,
@@ -438,6 +430,7 @@ namespace NullServers.Sandbox
                 CreatedAt = Time.unscaledTime,
                 Bones = physics.Select(body => body.transform).ToArray()
             };
+
             if (definition.Skin != null)
             {
                 state.Visual = new RagdollVisual(root, definition.Skin, _world.Assets.Textures);
@@ -445,10 +438,7 @@ namespace NullServers.Sandbox
 
             Stabilize(root, physics);
             _bodies[definition.Id] = state;
-            _world.Send(_world.Message(SandboxKind.Ragdoll) with
-            {
-                Ragdoll = definition
-            });
+            _world.Send(_world.Message(SandboxKind.Ragdoll) with { Ragdoll = definition });
         }
 
         private static void Stabilize(GameObject root, Rigidbody[] physics)
@@ -581,61 +571,20 @@ namespace NullServers.Sandbox
             return root;
         }
 
+        // Connects a host ragdoll to the matching local one. If the game did not spawn one here,
+        // the client makes its own copy after a second. The bones then follow the host's poses.
         private bool Bind(Body body)
         {
             RagdollDefinition definition = body.Definition;
-            GameObject root = _local.Values.Where(value => value &&
-                !_bound.Contains(value.Pointer) &&
-                value.name.Replace("(Clone)", "").Trim() == definition.Name &&
-                (definition.Player < 0 || _players.GetValueOrDefault(value.Pointer, -1) == definition.Player) &&
-                Vector3.Distance(value.transform.position, SandboxWorld.Vector(definition.Position)) < 8f)
-                .OrderBy(value => Vector3.Distance(value.transform.position, SandboxWorld.Vector(definition.Position))).FirstOrDefault();
-
+            GameObject root = FindLocal(definition);
             if (!root)
             {
                 if (Time.unscaledTime - body.CreatedAt < 1f) return false;
 
-                GameObject prefab = Resources.FindObjectsOfTypeAll<GameObject>().FirstOrDefault(value => !value.scene.IsValid() &&
-                    value.name == definition.Name &&
-                    value.GetComponentsInChildren<Rigidbody>(true).Length == definition.Bones.Length);
+                root = CreateCopy(definition);
+                if (!root) return false;
 
-                PlayerNetworkController player = definition.Living && definition.Player >= 0 ? SandboxWorld.Avatar(definition.Player) : null;
-                if (player && player.Damage && player.Damage.RagdollPrefab)
-                {
-                    prefab = player.Damage.RagdollPrefab.gameObject;
-                }
-
-                if (definition.Living && definition.NPC >= 0)
-                {
-                    GameObject source = SandboxWorld.Spawned(definition.NPC);
-                    Bot npc = source ? source.GetComponent<Bot>() : null;
-                    BossBot boss = source ? source.GetComponent<BossBot>() : null;
-
-                    if (npc && npc.RagdollPrefab)
-                    {
-                        prefab = npc.RagdollPrefab.gameObject;
-                    }
-                    else if (boss && boss.RagdollPrefab)
-                    {
-                        prefab = boss.RagdollPrefab.gameObject;
-                    }
-                }
-
-                if (!prefab) return false;
-
-                root = player ? PrepareLivingBody(prefab, player.gameObject, definition.Player) : CloneBody(prefab);
-                root.transform.position = SandboxWorld.Vector(definition.Position);
-
-                if (definition.Scale != null)
-                {
-                    root.transform.localScale = SandboxWorld.Vector(definition.Scale);
-                }
-
-                root.SetActive(true);
-                EnsurePhysics(root);
                 body.Copy = true;
-                _local[root.Pointer] = root;
-                _players[root.Pointer] = definition.Player;
             }
 
             Transform[] bones = definition.Bones.Select(path => Resolve(root.transform, path)).ToArray();
@@ -671,6 +620,60 @@ namespace NullServers.Sandbox
             return true;
         }
 
+        // The closest unbound local ragdoll with the same name and player, within 8 metres.
+        private GameObject FindLocal(RagdollDefinition definition)
+        {
+            Vector3 position = SandboxWorld.Vector(definition.Position);
+            return _local.Values.Where(value => value &&
+                !_bound.Contains(value.Pointer) &&
+                BodyName(value) == definition.Name &&
+                (definition.Player < 0 || _players.GetValueOrDefault(value.Pointer, -1) == definition.Player) &&
+                Vector3.Distance(value.transform.position, position) < 8f)
+                .OrderBy(value => Vector3.Distance(value.transform.position, position)).FirstOrDefault();
+        }
+
+        private GameObject CreateCopy(RagdollDefinition definition)
+        {
+            PlayerNetworkController player = definition.Living && definition.Player >= 0 ? SandboxWorld.Avatar(definition.Player) : null;
+            GameObject prefab = FindPrefab(definition, player);
+            if (!prefab) return null;
+
+            GameObject root = player ? PrepareLivingBody(prefab, player.gameObject, definition.Player) : CloneBody(prefab);
+            root.transform.position = SandboxWorld.Vector(definition.Position);
+
+            if (definition.Scale != null)
+            {
+                root.transform.localScale = SandboxWorld.Vector(definition.Scale);
+            }
+
+            root.SetActive(true);
+            EnsurePhysics(root);
+            _local[root.Pointer] = root;
+            _players[root.Pointer] = definition.Player;
+            return root;
+        }
+
+        // Living NPC ragdolls use the NPC's prefab, living player ragdolls the player's prefab,
+        // everything else the loaded prefab with the same name and bone count.
+        private static GameObject FindPrefab(RagdollDefinition definition, PlayerNetworkController player)
+        {
+            if (definition.Living && definition.NPC >= 0)
+            {
+                GameObject source = SandboxWorld.Spawned(definition.NPC);
+                Bot npc = source ? source.GetComponent<Bot>() : null;
+                if (npc && npc.RagdollPrefab) return npc.RagdollPrefab.gameObject;
+
+                BossBot boss = source ? source.GetComponent<BossBot>() : null;
+                if (boss && boss.RagdollPrefab) return boss.RagdollPrefab.gameObject;
+            }
+
+            if (player && player.Damage && player.Damage.RagdollPrefab) return player.Damage.RagdollPrefab.gameObject;
+
+            return Resources.FindObjectsOfTypeAll<GameObject>().FirstOrDefault(value => !value.scene.IsValid() &&
+                value.name == definition.Name &&
+                value.GetComponentsInChildren<Rigidbody>(true).Length == definition.Bones.Length);
+        }
+
         private void Scan()
         {
             foreach (RagdollController controller in Object.FindObjectsOfType<RagdollController>())
@@ -695,73 +698,83 @@ namespace NullServers.Sandbox
             {
                 _nextScan = Time.unscaledTime + 1f;
                 Scan();
-
-                foreach (IntPtr pointer in _local.Where(pair => !pair.Value).Select(pair => pair.Key).ToArray())
-                {
-                    _local.Remove(pointer);
-                    _players.Remove(pointer);
-                }
+                ForgetDestroyed();
             }
 
             if (!_world.IsHost)
             {
-                foreach (Body body in _bodies.Values)
-                {
-                    if (!body.Root && body.Bones != null)
-                    {
-                        body.Visual?.Dispose();
-                        body.Visual = null;
-                        body.Bones = null;
-                        body.Copy = false;
-                    }
-
-                    if (body.Bones == null && Time.unscaledTime >= body.BindAt)
-                    {
-                        body.BindAt = Time.unscaledTime + 1f;
-                        Bind(body);
-                    }
-                }
-
+                BindCopies();
                 return;
             }
 
             if (Time.unscaledTime < _poseAt) return;
 
             _poseAt = Time.unscaledTime + 0.05f;
-
             foreach (var pair in _bodies.ToArray())
             {
-                Body body = pair.Value;
-                if (body.Root && !body.Definition.Living && !_world.Environment.KeepRagdolls && body.DestroyAt > 0f &&
-                    Time.unscaledTime >= body.DestroyAt && !_world.Hands.HeldObjects.Contains(pair.Key))
-                {
-                    Remove(pair.Key);
-                    _world.Send(_world.Message(SandboxKind.RemoveRagdoll) with { Id = pair.Key });
-                    continue;
-                }
+                SendPose(pair.Key, pair.Value);
+            }
+        }
 
-                if (!body.Root)
+        private void ForgetDestroyed()
+        {
+            foreach (IntPtr pointer in _local.Where(pair => !pair.Value).Select(pair => pair.Key).ToArray())
+            {
+                _local.Remove(pointer);
+                _players.Remove(pointer);
+            }
+        }
+
+        // A client retries binding unbound ragdolls once per second.
+        private void BindCopies()
+        {
+            foreach (Body body in _bodies.Values)
+            {
+                if (!body.Root && body.Bones != null)
                 {
-                    _bodies.Remove(pair.Key);
                     body.Visual?.Dispose();
-                    _world.Physics.Forget(pair.Key);
-                    _world.Send(_world.Message(SandboxKind.RemoveRagdoll) with
-                    {
-                        Id = pair.Key
-                    });
-
-                    continue;
+                    body.Visual = null;
+                    body.Bones = null;
+                    body.Copy = false;
                 }
 
-                if (Time.unscaledTime < body.NextSend) continue;
-
-                bool sleeping = body.Physics.All(value => !value || value.IsSleeping());
-                body.NextSend = Time.unscaledTime + (sleeping ? 0.5f : 0.05f);
-
-                for (byte index = 0; index < body.Bones.Length; index++)
+                if (body.Bones == null && Time.unscaledTime >= body.BindAt)
                 {
-                    _world.Physics.Capture(pair.Key, index, body.Bones[index].position, body.Bones[index].rotation);
+                    body.BindAt = Time.unscaledTime + 1f;
+                    Bind(body);
                 }
+            }
+        }
+
+        // The host removes expired and destroyed ragdolls and sends the poses of the rest:
+        // 20 times per second while they move, twice per second while they sleep.
+        private void SendPose(int id, Body body)
+        {
+            if (body.Root && !body.Definition.Living && !_world.Environment.KeepRagdolls && body.DestroyAt > 0f &&
+                Time.unscaledTime >= body.DestroyAt && !_world.Hands.HeldObjects.Contains(id))
+            {
+                Remove(id);
+                _world.Send(_world.Message(SandboxKind.RemoveRagdoll) with { Id = id });
+                return;
+            }
+
+            if (!body.Root)
+            {
+                _bodies.Remove(id);
+                body.Visual?.Dispose();
+                _world.Physics.Forget(id);
+                _world.Send(_world.Message(SandboxKind.RemoveRagdoll) with { Id = id });
+                return;
+            }
+
+            if (Time.unscaledTime < body.NextSend) return;
+
+            bool sleeping = body.Physics.All(value => !value || value.IsSleeping());
+            body.NextSend = Time.unscaledTime + (sleeping ? 0.5f : 0.05f);
+
+            for (byte index = 0; index < body.Bones.Length; index++)
+            {
+                _world.Physics.Capture(id, index, body.Bones[index].position, body.Bones[index].rotation);
             }
         }
 

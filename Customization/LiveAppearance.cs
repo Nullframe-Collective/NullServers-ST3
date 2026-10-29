@@ -1,5 +1,4 @@
-﻿using HarmonyLib;
-using Il2Cpp;
+﻿using Il2Cpp;
 using Il2CppCodeStage.AntiCheat.Storage;
 using MelonLoader;
 using NullServers.Additional;
@@ -34,7 +33,7 @@ namespace NullServers.Customization
 
         internal bool SlotsAvailable => _slots.Available;
 
-        internal LiveAppearance(HarmonyLib.Harmony harmony, RelaySession session, PlayerProfiles profiles, MelonLogger.Instance logger)
+        internal LiveAppearance(RelaySession session, PlayerProfiles profiles, MelonLogger.Instance logger)
         {
             _instance = this;
             _session = session;
@@ -42,14 +41,6 @@ namespace NullServers.Customization
             _slots = new HatSynchronization(session, profiles, logger);
 
             Frameworks.Customization?.PlayerReady(CaptureCustomHats);
-
-            harmony.Patch(
-                AccessTools.Method(typeof(CharacterCustomization), nameof(CharacterCustomization.Awake)),
-                postfix: new HarmonyMethod(typeof(LiveAppearance), nameof(CaptureHats)));
-
-            harmony.Patch(
-                AccessTools.Method(typeof(SyncCustomization), nameof(SyncCustomization.MKFLOHBILFG)),
-                prefix: new HarmonyMethod(typeof(LiveAppearance), nameof(BeforeNativeAppearance)));
         }
 
         private void CaptureCustomHats(SyncCustomization source)
@@ -72,7 +63,7 @@ namespace NullServers.Customization
             }
         }
 
-        private static void CaptureHats(CharacterCustomization __instance)
+        internal static void CaptureHats(CharacterCustomization __instance)
         {
             foreach (CharacterCustomization.hat hat in __instance.AllHats)
             {
@@ -83,7 +74,7 @@ namespace NullServers.Customization
             }
         }
 
-        private static bool BeforeNativeAppearance(SyncCustomization __instance)
+        internal static bool BeforeNativeAppearance(SyncCustomization __instance)
         {
             LiveAppearance instance = _instance;
             if (!instance.Active) return true;
@@ -244,7 +235,7 @@ namespace NullServers.Customization
             sync.SendAppearance(appearance.Hat, sync.FurColor, appearance.SkinData);
             VisualFor(sync).Apply(appearance, Textures);
 
-            _logger.Msg($"Appearance updated: hat {appearance.Hat}; fur {appearance.FurColor}; skin={appearance.UseSkin}.");
+            _logger.Debug($"Appearance updated: hat {appearance.Hat}; fur {appearance.FurColor}; skin={appearance.UseSkin}.");
 
             error = null;
 

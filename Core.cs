@@ -8,12 +8,14 @@ using NullServers.Room;
 using NullServers.Sandbox;
 using NullServers.Server;
 using NullServers.UI;
+using NullServers.Voice;
 
-[assembly: MelonInfo(typeof(NullServers.Core), "NullServers", "0.0.37", "NullFrame Collective", "https://github.com/Nullframe-Collective/NullServers-ST3")]
+[assembly: MelonInfo(typeof(NullServers.Core), "NullServers", "0.0.73", "NullFrame Collective", "https://github.com/Nullframe-Collective/NullServers-ST3")]
 [assembly: MelonOptionalDependencies("CustomWeaponsFramework", "CustomPlayerCustomization", "CustomNPCFramework", "CustomGameModesFramework", "CustomMapsFramework")]
 [assembly: MelonPriority(100)]
 [assembly: MelonGame("ZeoWorks", "Slendytubbies 3")]
 [assembly: MelonColor(8, 115, 115, 115)]
+[assembly: HarmonyDontPatchAll]
 
 namespace NullServers
 {
@@ -21,6 +23,7 @@ namespace NullServers
     {
         private PlayerProfiles _profiles;
         private FrameworkCompatibility _compatibility;
+        private JoinNotices _joinNotices;
         private AddonMenu _addons;
         private ProfileMenu _profileMenu;
         private ServerControl _serverControl;
@@ -38,39 +41,51 @@ namespace NullServers
         private ContentDownloads _downloads;
         private ContentServer _contentServer;
         private DownloadPanel _downloadPanel;
+        private VersionLabel _versionLabel;
+        private VoiceRelay _voice;
+        private VoiceIndicators _voiceIndicators;
+        private VoiceSettingsEntry _voiceSettings;
 
         public override void OnInitializeMelon()
         {
             Frameworks.Initialize(HarmonyInstance, LoggerInstance);
 
             RoomOptions options = new();
-            RelaySession session = new(HarmonyInstance, options, LoggerInstance);
+            RelaySession session = new(options, LoggerInstance);
             _session = session;
-            _community = new CommunityMenu(HarmonyInstance, session, LoggerInstance);
+            _community = new CommunityMenu(session, LoggerInstance);
             session.RefreshAddons();
             ColorPicker picker = new();
 
-            _addons = new AddonMenu(HarmonyInstance, session);
+            _addons = new AddonMenu(session);
 
-            _profiles = new PlayerProfiles(HarmonyInstance, session, LoggerInstance);
+            _profiles = new PlayerProfiles(session, LoggerInstance);
             _compatibility = new FrameworkCompatibility(session, _profiles, LoggerInstance);
-            _profileMenu = new ProfileMenu(HarmonyInstance, session, _profiles, picker);
-            _serverControl = new ServerControl(HarmonyInstance, session, _profiles, LoggerInstance);
+            _joinNotices = new JoinNotices(session, _compatibility);
+            _profileMenu = new ProfileMenu(session, _profiles, picker);
+            _serverControl = new ServerControl(session, _profiles, LoggerInstance);
             _pauseMenu = new PauseMenu(session);
             _serverSettings = new ServerSettings(_serverControl, _pauseMenu);
-            _appearance = new LiveAppearance(HarmonyInstance, session, _profiles, LoggerInstance);
+            _appearance = new LiveAppearance(session, _profiles, LoggerInstance);
             _appearanceMenu = new AppearanceMenu(_pauseMenu, _appearance, _profiles);
-            _sandboxWorld = new SandboxWorld(HarmonyInstance, _serverControl, _profiles, session);
-            _sandboxMenu = new SandboxMenu(HarmonyInstance, _sandboxWorld);
-            _serverMenu = new ServerMenu(HarmonyInstance, LoggerInstance, session, _community);
-            _roomCustomization = new RoomCustomization(HarmonyInstance, session, options, picker);
-            _playerList = new PlayerList(HarmonyInstance, session, _profiles);
+            _sandboxWorld = new SandboxWorld(_serverControl, _profiles, session);
+            _sandboxMenu = new SandboxMenu(_sandboxWorld);
+            _serverMenu = new ServerMenu(LoggerInstance, session, _community);
+            _roomCustomization = new RoomCustomization(session, options, picker);
+            _playerList = new PlayerList(session, _profiles);
 
             _downloads = new ContentDownloads(session, _profiles, LoggerInstance);
             session.Downloads = _downloads;
             _compatibility.Downloads = _downloads;
             _contentServer = new ContentServer(session, _serverControl, _profiles);
             _downloadPanel = new DownloadPanel(_downloads, _pauseMenu);
+            _versionLabel = new VersionLabel(Info.Version);
+            _voice = new VoiceRelay(session, _profiles);
+            _voiceIndicators = new VoiceIndicators();
+            _voiceSettings = new VoiceSettingsEntry();
+
+            // The patch classes call into the objects created above, so they are applied only after everything exists.
+            HarmonyInstance.PatchAll(typeof(Core).Assembly);
 
             LoggerInstance.Msg($"Initialized. NullFrame GameVersion: {RelaySession.NullFrameGameVersion}.");
         }
@@ -82,6 +97,7 @@ namespace NullServers
             _addons?.Update();
             _profiles?.Update();
             _compatibility?.Update();
+            _joinNotices?.Update();
             _downloads?.Update();
             _contentServer?.Update();
             _serverControl?.Update();
@@ -92,13 +108,20 @@ namespace NullServers
             _sandboxWorld?.Update();
             _sandboxMenu?.Update();
             _downloadPanel?.Update();
+            _versionLabel?.Update();
+            _voice?.Update();
+            _voiceIndicators?.Update();
+            _voiceSettings?.Update();
         }
+
+        public override void OnGUI() => _voiceIndicators?.Draw();
 
         public override void OnLateUpdate()
         {
             _sandboxWorld?.Ragdolls.LateUpdate();
             _sandboxWorld?.Hands.LateUpdate();
             _sandboxWorld?.Living.LateUpdate();
+            _sandboxMenu?.LateUpdate();
         }
 
         public override void OnFixedUpdate() => _sandboxWorld?.Hands.FixedUpdate();

@@ -83,7 +83,7 @@ namespace NullServers.Content
                 throw new InvalidDataException("Invalid block count.");
             }
 
-            var blocks = new (uint Uncompressed, uint Compressed, ushort Flags)[blockCount];
+            (uint Uncompressed, uint Compressed, ushort Flags)[] blocks = new (uint Uncompressed, uint Compressed, ushort Flags)[blockCount];
             long total = 0;
 
             for (int index = 0; index < blockCount; index++)
@@ -146,8 +146,8 @@ namespace NullServers.Content
         private static byte[] Decompress(byte[] source, int size, uint compression) => compression switch
         {
             0 when source.Length == size => source,
+            1 => Lzma.Decode(source, size),
             2 or 3 => Lz4.Decode(source, size),
-            1 => throw new InvalidDataException("LZMA bundles are not accepted. Rebuild the pack with LZ4 (ChunkBasedCompression)."),
             _ => throw new InvalidDataException("Unsupported bundle compression " + compression + ".")
         };
     }
@@ -265,7 +265,7 @@ namespace NullServers.Content
                 throw new InvalidDataException("Unexpected end of data.");
             }
 
-            var span = new ReadOnlySpan<byte>(_data, Position, count);
+            ReadOnlySpan<byte> span = new ReadOnlySpan<byte>(_data, Position, count);
             Position += count;
             return span;
         }

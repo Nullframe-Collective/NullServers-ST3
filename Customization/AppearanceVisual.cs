@@ -81,21 +81,31 @@ namespace NullServers.Customization
             }
         }
 
+        // Resets every material to the original, then paints the fur color and the skin images on top.
         internal void Apply(Appearance appearance, SkinTextures textures)
         {
             Texture2D[] images = textures.Get(appearance);
-
-            if (_applied?.SameLook(appearance) == true && _images != null && images.SequenceEqual(_images))
-            {
-                return;
-            }
+            if (_applied?.SameLook(appearance) == true && _images != null && images.SequenceEqual(_images)) return;
 
             _applied = appearance;
             _images = images;
             ColorUtility.TryParseHtmlString(appearance.FurColor, out Color fur);
 
             ApplyHats(appearance.Hats);
+            ResetMaterials(fur);
+            ShowSkinHead(images[0]);
 
+            for (int part = 0; part < images.Length; part++)
+            {
+                if (images[part])
+                {
+                    ApplyImage(part, images[part]);
+                }
+            }
+        }
+
+        private void ResetMaterials(Color fur)
+        {
             foreach (Surface surface in _surfaces)
             {
                 if (!surface.Renderer || !surface.Materials[0]) continue;
@@ -112,52 +122,55 @@ namespace NullServers.Customization
                     material.color = fur;
                 }
             }
+        }
 
+        // A head image replaces the model's own head with the separate skin head.
+        private void ShowSkinHead(Texture2D head)
+        {
             if (_head)
             {
-                _head.enabled = !images[0] && _headEnabled;
-                _head.forceRenderingOff = images[0] || _headForceOff;
+                _head.enabled = !head && _headEnabled;
+                _head.forceRenderingOff = head || _headForceOff;
             }
 
             if (_skinHead)
             {
-                _skinHead.gameObject.SetActive(images[0]);
+                _skinHead.gameObject.SetActive(head);
                 if (_preview)
                 {
-                    _skinHead.enabled = images[0];
+                    _skinHead.enabled = head;
                 }
             }
+        }
 
-            for (int part = 0; part < images.Length; part++)
+        // Body, arms and legs images use the plain Diffuse shader in white, so the image keeps its own colors.
+        private void ApplyImage(int part, Texture2D image)
+        {
+            foreach (Renderer renderer in _parts[part])
             {
-                if (!images[part]) continue;
+                if (!renderer) continue;
 
-                foreach (Renderer renderer in _parts[part])
+                Material material = _surfaces.FirstOrDefault(surface => surface.Renderer == renderer)?.Materials[0];
+                if (!material) continue;
+
+                if (part != 0)
                 {
-                    if (!renderer) continue;
-
-                    Material material = _surfaces.FirstOrDefault(surface => surface.Renderer == renderer)?.Materials[0];
-                    if (!material) continue;
-
-                    if (part != 0)
+                    Shader shader = Shader.Find("Diffuse");
+                    if (shader)
                     {
-                        Shader shader = Shader.Find("Diffuse");
-                        if (shader)
-                        {
-                            material.shader = shader;
-                        }
+                        material.shader = shader;
                     }
+                }
 
-                    material.mainTexture = images[part];
-                    if (part != 0)
-                    {
-                        material.color = Color.white;
-                    }
+                material.mainTexture = image;
+                if (part != 0)
+                {
+                    material.color = Color.white;
+                }
 
-                    if (material.HasProperty("_TopMainTex"))
-                    {
-                        material.SetTexture("_TopMainTex", images[part]);
-                    }
+                if (material.HasProperty("_TopMainTex"))
+                {
+                    material.SetTexture("_TopMainTex", image);
                 }
             }
         }

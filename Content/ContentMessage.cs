@@ -1,4 +1,6 @@
 using NullServers.Network;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 
 namespace NullServers.Content
 {
@@ -30,6 +32,10 @@ namespace NullServers.Content
         internal const int MaxBytes = 65536;
         internal const int ChunkSize = 32768;
         internal const int MaxRange = 131072;
+
+        private static readonly JsonSerializerOptions Options = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+
+        internal string Serialize() => JsonSerializer.Serialize(this, Options);
 
         internal static bool TryParse(string json, out ContentMessage message)
         {

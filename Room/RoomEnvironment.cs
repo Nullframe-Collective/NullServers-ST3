@@ -1,4 +1,5 @@
-﻿using UnityEngine;
+﻿using Il2Cpp;
+using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.SceneManagement;
 
@@ -92,15 +93,17 @@ namespace NullServers.Room
             _applied = options;
         }
 
+        internal void Reapply()
+        {
+            if (_active && _applied != null)
+            {
+                Lighting(_applied);
+            }
+        }
+
         private void Apply(RenderOptions options)
         {
-            RenderSettings.fog = options.Fog;
-            RenderSettings.fogMode = (FogMode)options.FogMode;
-            ColorUtility.TryParseHtmlString(options.FogColor, out Color fog);
-            RenderSettings.fogColor = fog;
-            RenderSettings.fogDensity = options.FogDensity;
-            RenderSettings.fogStartDistance = options.FogStart;
-            RenderSettings.fogEndDistance = options.FogEnd;
+            Lighting(options);
 
             if (_skybox)
             {
@@ -120,9 +123,22 @@ namespace NullServers.Room
             }
 
             RenderSettings.skybox = _skybox;
+        }
+
+        private void Lighting(RenderOptions options)
+        {
+            RenderSettings.fog = options.Fog;
+            RenderSettings.fogMode = (FogMode)options.FogMode;
+            ColorUtility.TryParseHtmlString(options.FogColor, out Color fog);
+            RenderSettings.fogColor = fog;
+            RenderSettings.fogDensity = options.FogDensity;
+            RenderSettings.fogStartDistance = options.FogStart;
+            RenderSettings.fogEndDistance = options.FogEnd;
             ColorUtility.TryParseHtmlString(options.AmbientColor, out Color ambient);
             RenderSettings.ambientMode = AmbientMode.Flat;
             RenderSettings.ambientLight = ambient;
+            MapView(options.Fog, options.FogDensity, fog, AmbientMode.Flat, ambient);
+            NightVision(options.FogDensity);
             RenderSettings.ambientIntensity = options.AmbientIntensity;
             RenderSettings.reflectionIntensity = options.ReflectionIntensity;
 
@@ -140,6 +156,8 @@ namespace NullServers.Room
             RenderSettings.skybox = _originalSkybox;
             RenderSettings.ambientMode = _ambientMode;
             RenderSettings.ambientLight = _ambientLight;
+            MapView(RenderSettings.fog, RenderSettings.fogDensity, RenderSettings.fogColor, _ambientMode, RenderSettings.ambientSkyColor);
+            NightVision(RenderSettings.fogDensity);
 
             if (_skybox)
             {
@@ -148,6 +166,31 @@ namespace NullServers.Room
 
             _skybox = null;
             _applied = null;
+        }
+
+        internal void NightVision(ToggleNightVision vision)
+        {
+            if (_active && _applied != null && vision)
+            {
+                vision.JDJOBDIHCFL = _applied.FogDensity;
+            }
+        }
+
+        private static void NightVision(float density)
+        {
+            foreach (ToggleNightVision vision in UnityEngine.Object.FindObjectsOfType<ToggleNightVision>(true))
+            {
+                vision.JDJOBDIHCFL = density;
+            }
+        }
+
+        private static void MapView(bool fog, float density, Color color, AmbientMode mode, Color ambient)
+        {
+            MapViewSettings.AKLDPIDNJFI = fog;
+            MapViewSettings.EMLABEHACJO = density;
+            MapViewSettings.EHODIHCACEE = color;
+            MapViewSettings.OIHNFFOHANC = mode;
+            MapViewSettings.DMPDAAPAHMD = ambient;
         }
 
         private void Release()

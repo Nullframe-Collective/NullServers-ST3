@@ -1,6 +1,5 @@
 ﻿using Il2Cpp;
 using Il2CppFishNet.Connection;
-using Il2CppInterop.Runtime;
 using NullServers.Network;
 using UnityEngine;
 using Object = UnityEngine.Object;
@@ -25,6 +24,10 @@ namespace NullServers.Sandbox
         private readonly Dictionary<int, Grip> _grips = new();
         private readonly Dictionary<IntPtr, (Renderer Renderer, bool Enabled)> _hidden = new();
         private readonly Dictionary<IntPtr, (WeaponManager Manager, bool Enabled)> _managers = new();
+        private readonly Dictionary<IntPtr, (float Until, Renderer[] Renderers)> _renderers = new();
+        private readonly HashSet<IntPtr> _desired = new();
+        private readonly List<IntPtr> _stale = new();
+        private (IntPtr Movement, float Until, WeaponManager[] Managers) _localManagers;
         private bool _building;
         private bool _releasePending;
         private bool _waitForButtons;
@@ -65,13 +68,11 @@ namespace NullServers.Sandbox
             }
         }
 
+        // The host checks every carry request: releasing, equipping the building hands, or grabbing an object.
         internal string Request(int sender, SandboxMessage message)
         {
             CarryState request = message.Carry;
-            if (request?.Valid != true)
-            {
-                return "Invalid carry request.";
-            }
+            if (request?.Valid != true) return "Invalid carry request.";
 
             if (message.Kind == SandboxKind.CarryRelease)
             {
@@ -81,147 +82,135 @@ namespace NullServers.Sandbox
 
             if (message.Kind == SandboxKind.CarryState && !request.Equipped)
             {
-                Release(sender, false, false);
-                _grips[sender] = new Grip { State = new CarryState(sender, false) };
-                _world.Send(_world.Message(SandboxKind.CarryState) with
-                {
-                    Carry = _grips[sender].State
-                });
+                SetHands(sender, new CarryState(sender, false), false);
                 return null;
             }
 
             CarryTarget permission = message.Kind == SandboxKind.CarryState ? CarryTarget.Prop : request.Target;
+            string error = CarryError(sender, permission, out PlayerNetworkController actor);
+            if (error != null) return error;
+
+            if (message.Kind == SandboxKind.CarryState)
+            {
+                SetHands(sender, new CarryState(sender, true, Building: true), true);
+                return null;
+            }
+
+            if (message.Kind != SandboxKind.CarryGrab) return "Unknown carry request.";
+
+            return Grab(sender, message.Id, request, actor);
+        }
+
+        private void SetHands(int sender, CarryState state, bool building)
+        {
+            Release(sender, false, false);
+            _grips[sender] = new Grip { State = state, Building = building };
+            _world.Send(_world.Message(SandboxKind.CarryState) with { Carry = state });
+        }
+
+        private string CarryError(int sender, CarryTarget permission, out PlayerNetworkController actor)
+        {
+            actor = null;
             if (!CarryRules.Allowed(_world.ConsoleEnabled, _world.Administrator(sender), _world.Environment.ThrowAnyone, permission))
             {
                 return "The host must enable the sandbox console or Throw Any One first.";
             }
 
-            if (_world.Living.IsDown(sender))
-            {
-                return "You cannot carry an object while ragdolled.";
-            }
+            if (_world.Living.IsDown(sender)) return "You cannot carry an object while ragdolled.";
 
-            PlayerNetworkController actor = SandboxWorld.Avatar(sender);
-            if (!actor || !actor.Damage || actor.Damage.Health <= 0f)
-            {
-                return "A living character is required.";
-            }
+            actor = SandboxWorld.Avatar(sender);
+            if (!actor || !actor.Damage || actor.Damage.Health <= 0f) return "A living character is required.";
 
-            if (message.Kind == SandboxKind.CarryState)
-            {
-                Release(sender, false, false);
-                _grips[sender] = new Grip { State = new CarryState(sender, true, Building: true), Building = true };
-                _world.Send(_world.Message(SandboxKind.CarryState) with
-                {
-                    Carry = _grips[sender].State
-                });
-                return null;
-            }
+            return null;
+        }
 
-            if (message.Kind != SandboxKind.CarryGrab)
-            {
-                return "Unknown carry request.";
-            }
-
-            if (request.Position == null)
-            {
-                return "Aim at a nearby object.";
-            }
+        private string Grab(int sender, int id, CarryState request, PlayerNetworkController actor)
+        {
+            if (request.Position == null) return "Aim at a nearby object.";
 
             Vector3 point = SandboxWorld.Vector(request.Position);
-            float reach = CarryRules.Reach * _world.Effects(sender).Scale;
+            float scale = _world.Effects(sender).Scale;
+            float reach = CarryRules.Reach * scale;
+            if (Vector3.Distance(actor.transform.position + Vector3.up * scale, point) > reach + 1f) return "Move closer to the object.";
 
-            if (Vector3.Distance(actor.transform.position + Vector3.up * _world.Effects(sender).Scale, point) > reach + 1f)
-            {
-                return "Move closer to the object.";
-            }
-
-            int id = message.Id;
-            bool createdLiving = false;
-            string Failed(string error)
-            {
-                if (createdLiving)
-                {
-                    _world.Living.Cancel(id);
-                }
-
-                return error;
-            }
-
+            // A living player or NPC is first turned into a ragdoll, which is then carried like any other ragdoll.
             CarryTarget kind = request.Target;
-            GameObject root;
-
+            bool createdLiving = false;
             if (kind is CarryTarget.Player or CarryTarget.NPC)
             {
                 string error = _world.Living.Take(sender, kind, id, point, out id);
-                if (error != null)
-                {
-                    return error;
-                }
+                if (error != null) return error;
 
                 createdLiving = true;
                 kind = CarryTarget.Ragdoll;
             }
 
+            string failure = TryHold(sender, id, kind, point, request.Bone, actor);
+            if (failure != null && createdLiving)
+            {
+                _world.Living.Cancel(id);
+            }
+
+            return failure;
+        }
+
+        private string TryHold(int sender, int id, CarryTarget kind, Vector3 point, int bone, PlayerNetworkController actor)
+        {
+            GameObject root;
             if (kind == CarryTarget.Prop)
             {
-                BuildingObject state = _world.Building.State(id);
-                if (state == null || !SandboxMessage.CanEdit(state.Owner, sender, _world.Administrator(sender)))
-                {
-                    return "You can carry your own props; administrators can carry all props.";
-                }
-
-                root = _world.Building.Root(id);
-                if (!state.Dynamic)
-                {
-                    string error = _world.Building.Request(sender, _world.Message(SandboxKind.Edit) with
-                    {
-                        Object = state with
-                        {
-                            Dynamic = true
-                        }
-                    });
-                    if (error != null)
-                    {
-                        return error;
-                    }
-                }
+                string error = PrepareProp(sender, id, out root);
+                if (error != null) return error;
             }
             else
             {
                 root = _world.Ragdolls.Root(id);
             }
 
-            if (!root)
-            {
-                return Failed("This object is no longer available.");
-            }
+            if (!root) return "This object is no longer available.";
 
             Bounds bounds = SandboxAssets.BoundsOf(root);
             bounds.Expand(0.5f);
+            if (!bounds.Contains(point)) return "Aim at the object's surface.";
 
-            if (!bounds.Contains(point))
+            if (_grips.Any(pair => pair.Key != sender && pair.Value.State.Holding == id)) return "Someone is already holding this object.";
+
+            Rigidbody body = kind == CarryTarget.Prop ? root.GetComponent<Rigidbody>() : _world.Ragdolls.PhysicsBody(id, bone);
+            if (!body) return "This object has no physics body.";
+
+            Hold(sender, id, kind, point, bone, body, root, actor);
+            return null;
+        }
+
+        // A static prop becomes dynamic before it can be carried.
+        private string PrepareProp(int sender, int id, out GameObject root)
+        {
+            root = null;
+            BuildingObject state = _world.Building.State(id);
+            if (state == null || !SandboxMessage.CanEdit(state.Owner, sender, _world.Administrator(sender)))
             {
-                return Failed("Aim at the object's surface.");
+                return "You can carry your own props; administrators can carry all props.";
             }
 
-            if (_grips.Any(pair => pair.Key != sender && pair.Value.State.Holding == id))
-            {
-                return Failed("Someone is already holding this object.");
-            }
+            root = _world.Building.Root(id);
+            if (state.Dynamic) return null;
 
-            Rigidbody body = kind == CarryTarget.Prop ? root.GetComponent<Rigidbody>() : _world.Ragdolls.PhysicsBody(id, request.Bone);
-            if (!body)
-            {
-                return Failed("This object has no physics body.");
-            }
+            SandboxMessage edit = _world.Message(SandboxKind.Edit) with { Object = state with { Dynamic = true } };
+            return _world.Building.Request(sender, edit);
+        }
 
+        private void Hold(int sender, int id, CarryTarget kind, Vector3 point, int bone, Rigidbody body, GameObject root, PlayerNetworkController actor)
+        {
             Release(sender, false, false);
             body.isKinematic = false;
             body.WakeUp();
+
             bool building = _grips.GetValueOrDefault(sender)?.Building == true;
-            CarryState stateNow = new(sender, true, id, SandboxWorld.Point(point), SandboxWorld.Rotation(body.rotation),
-                Grip: SandboxWorld.Point(body.transform.InverseTransformPoint(point)), Target: kind, Bone: request.Bone, Building: building);
+            Point3 grip = SandboxWorld.Point(body.transform.InverseTransformPoint(point));
+            CarryState state = new(sender, true, id, SandboxWorld.Point(point), SandboxWorld.Rotation(body.rotation),
+                Grip: grip, Target: kind, Bone: bone, Building: building);
+
+            // The carrier's own colliders must not push the object it holds.
             IEnumerable<Collider> holder = actor.GetComponentsInChildren<Collider>(true);
             if (sender == _world.LocalId)
             {
@@ -230,7 +219,7 @@ namespace NullServers.Sandbox
 
             _grips[sender] = new Grip
             {
-                State = stateNow,
+                State = state,
                 Body = body,
                 Target = point,
                 Rotation = body.rotation,
@@ -238,6 +227,7 @@ namespace NullServers.Sandbox
                 Building = building,
                 Constraint = new RigidGrip(body, root, holder.ToArray())
             };
+
             if (sender == _world.LocalId)
             {
                 _rotation = body.rotation;
@@ -246,11 +236,7 @@ namespace NullServers.Sandbox
             }
 
             _world.Living.Held(id, sender);
-            _world.Send(_world.Message(SandboxKind.CarryState) with
-            {
-                Carry = stateNow
-            });
-            return null;
+            _world.Send(_world.Message(SandboxKind.CarryState) with { Carry = state });
         }
 
         internal void Aim(int sender, CarryState state)
@@ -406,11 +392,9 @@ namespace NullServers.Sandbox
 
         internal void Update()
         {
-            if (!_world.Active)
-            {
-                return;
-            }
+            if (!_world.Active) return;
 
+            // After a release, clicks are ignored until both mouse buttons are up again.
             if (_waitForButtons && Time.frameCount > _releaseFrame &&
                 !Input.GetMouseButton(0) && !Input.GetMouseButton(1) &&
                 !Input.GetMouseButtonUp(0) && !Input.GetMouseButtonUp(1))
@@ -421,6 +405,7 @@ namespace NullServers.Sandbox
             bool allowed = Cursor.lockState == CursorLockMode.Locked && !SandboxWorld.Typing();
             if (!allowed)
             {
+                // An open menu or chat drops the held object after half a second.
                 if (Holding > 0 && Time.unscaledTime - _allowedAt > 0.5f)
                 {
                     RequestRelease();
@@ -431,115 +416,108 @@ namespace NullServers.Sandbox
 
             _allowedAt = Time.unscaledTime;
             Camera camera = Camera.main;
-
-            if (!camera || _world.Living.IsDown(_world.LocalId))
-            {
-                return;
-            }
+            if (!camera || _world.Living.IsDown(_world.LocalId)) return;
 
             if (Holding > 0)
             {
-                if (_releasePending)
-                {
-                    return;
-                }
-
-                if (Input.GetKeyDown(KeyCode.E) || Input.GetMouseButtonDown(0) || Input.GetMouseButtonDown(1))
-                {
-                    RequestRelease(Input.GetMouseButtonDown(0), Input.GetMouseButtonDown(1));
-                    return;
-                }
-
-                _distance = Mathf.Clamp(_distance + Input.GetAxis("Mouse ScrollWheel") * 2f, 1f, 4f);
-                if (Rotating)
-                {
-                    _rotation = Quaternion.AngleAxis(Input.GetAxis("Mouse X") * 4f, camera.transform.up) *
-                                    Quaternion.AngleAxis(-Input.GetAxis("Mouse Y") * 4f, camera.transform.right) * _rotation;
-                }
-
-                _localTarget = camera.transform.position + camera.transform.forward * _distance;
-                _hasAim = true;
-
-                if (_world.IsHost && _grips.TryGetValue(_world.LocalId, out var local))
-                {
-                    local.Target = _localTarget;
-                    local.Rotation = _rotation;
-                    local.AimAt = Time.unscaledTime;
-                }
-
-                if (Time.unscaledTime >= _aimAt)
-                {
-                    _aimAt = Time.unscaledTime + 0.05f;
-                    _world.SubmitAim(_world.Message(SandboxKind.CarryAim) with
-                    {
-                        Carry = new CarryState(_world.LocalId, true, Holding,
-                            SandboxWorld.Point(_localTarget),
-                            SandboxWorld.Rotation(_rotation), Sequence: ++_sequence, Rotate: Rotating)
-                    });
-                }
-
+                UpdateHeldObject(camera);
                 return;
             }
 
-            if (!Input.GetKeyDown(KeyCode.E) || _world.Building.Placing || !_world.ConsoleEnabled && !_world.IsAdmin && !_world.Environment.ThrowAnyone)
+            if (!Input.GetKeyDown(KeyCode.E) || _world.Building.Placing) return;
+            if (!_world.ConsoleEnabled && !_world.IsAdmin && !_world.Environment.ThrowAnyone) return;
+
+            TryGrab(camera);
+        }
+
+        private void UpdateHeldObject(Camera camera)
+        {
+            if (_releasePending) return;
+
+            if (Input.GetKeyDown(KeyCode.E) || Input.GetMouseButtonDown(0) || Input.GetMouseButtonDown(1))
             {
+                RequestRelease(Input.GetMouseButtonDown(0), Input.GetMouseButtonDown(1));
                 return;
             }
 
-            float reach = CarryRules.Reach * _world.Effects(_world.LocalId).Scale;
+            _distance = Mathf.Clamp(_distance + Input.GetAxis("Mouse ScrollWheel") * 2f, 1f, 4f);
+            if (Rotating)
+            {
+                Quaternion yaw = Quaternion.AngleAxis(Input.GetAxis("Mouse X") * 4f, camera.transform.up);
+                Quaternion pitch = Quaternion.AngleAxis(-Input.GetAxis("Mouse Y") * 4f, camera.transform.right);
+                _rotation = yaw * pitch * _rotation;
+            }
+
+            _localTarget = camera.transform.position + camera.transform.forward * _distance;
+            _hasAim = true;
+
+            if (_world.IsHost && _grips.TryGetValue(_world.LocalId, out Grip local))
+            {
+                local.Target = _localTarget;
+                local.Rotation = _rotation;
+                local.AimAt = Time.unscaledTime;
+            }
+
+            if (Time.unscaledTime < _aimAt) return;
+
+            _aimAt = Time.unscaledTime + 0.05f;
+            CarryState aim = new(_world.LocalId, true, Holding, SandboxWorld.Point(_localTarget), SandboxWorld.Rotation(_rotation),
+                Sequence: ++_sequence, Rotate: Rotating);
+            _world.SubmitAim(_world.Message(SandboxKind.CarryAim) with { Carry = aim });
+        }
+
+        private void TryGrab(Camera camera)
+        {
+            float scale = _world.Effects(_world.LocalId).Scale;
+            float reach = CarryRules.Reach * scale;
             PlayerNetworkController actor = SandboxWorld.Avatar(_world.LocalId);
-            float cameraOffset = actor ? Vector3.Distance(camera.transform.position, actor.transform.position + Vector3.up * _world.Effects(_world.LocalId).Scale) : 0f;
+            float cameraOffset = actor ? Vector3.Distance(camera.transform.position, actor.transform.position + Vector3.up * scale) : 0f;
 
-            if (!_world.Building.Surface(new Ray(camera.transform.position, camera.transform.forward), reach + cameraOffset, out var hit, true))
-            {
-                return;
-            }
-
-            CarryTarget kind;
-            int id, bone = 0;
-
-            if (_world.Ragdolls.Pick(hit, out id, out bone))
-            {
-                kind = CarryTarget.Ragdoll;
-            }
-            else if (_world.Building.Pick(camera, out id, out _))
-            {
-                kind = CarryTarget.Prop;
-            }
-            else
-            {
-                PlayerNetworkController player = hit.transform.GetComponentInParent<PlayerNetworkController>();
-                Bot npc = hit.transform.GetComponentInParent<Bot>();
-                BossBot boss = hit.transform.GetComponentInParent<BossBot>();
-
-                if (player)
-                {
-                    kind = CarryTarget.Player;
-                    id = player.OwnerId;
-                }
-                else if (npc)
-                {
-                    kind = CarryTarget.NPC;
-                    id = npc.NetworkObject.ObjectId;
-                }
-                else if (boss)
-                {
-                    kind = CarryTarget.NPC;
-                    id = boss.NetworkObject.ObjectId;
-                }
-                else
-                {
-                    return;
-                }
-            }
+            Ray ray = new(camera.transform.position, camera.transform.forward);
+            if (!_world.Building.Surface(ray, reach + cameraOffset, out var hit, true)) return;
+            if (!PickTarget(camera, hit, out CarryTarget kind, out int id, out int bone)) return;
 
             _distance = Mathf.Clamp(hit.distance, 1f, 4f);
             _world.Building.Stop();
-            _world.Submit(_world.Message(SandboxKind.CarryGrab) with
+            CarryState grab = new(_world.LocalId, true, Position: SandboxWorld.Point(hit.point), Target: kind, Bone: bone);
+            _world.Submit(_world.Message(SandboxKind.CarryGrab) with { Id = id, Carry = grab });
+        }
+
+        // Finds what the player looks at: a ragdoll, a placed prop, another player or an NPC.
+        private bool PickTarget(Camera camera, RaycastHit hit, out CarryTarget kind, out int id, out int bone)
+        {
+            kind = CarryTarget.Ragdoll;
+            bone = 0;
+
+            if (_world.Ragdolls.Pick(hit, out id, out bone)) return true;
+
+            kind = CarryTarget.Prop;
+            if (_world.Building.Pick(camera, out id, out _)) return true;
+
+            PlayerNetworkController player = hit.transform.GetComponentInParent<PlayerNetworkController>();
+            if (player)
             {
-                Id = id,
-                Carry = new CarryState(_world.LocalId, true, Position: SandboxWorld.Point(hit.point), Target: kind, Bone: bone)
-            });
+                kind = CarryTarget.Player;
+                id = player.OwnerId;
+                return true;
+            }
+
+            kind = CarryTarget.NPC;
+            Bot npc = hit.transform.GetComponentInParent<Bot>();
+            if (npc)
+            {
+                id = npc.NetworkObject.ObjectId;
+                return true;
+            }
+
+            BossBot boss = hit.transform.GetComponentInParent<BossBot>();
+            if (boss)
+            {
+                id = boss.NetworkObject.ObjectId;
+                return true;
+            }
+
+            return false;
         }
 
         internal void FixedUpdate()
@@ -577,82 +555,24 @@ namespace NullServers.Sandbox
                 return;
             }
 
-            if (!_world.IsHost && _hasAim && !_releasePending && Cursor.lockState == CursorLockMode.Locked &&
-                _grips.TryGetValue(_world.LocalId, out var local) && local.State.Holding > 0 && local.State.Grip != null)
-            {
-                if (local.State.Target == CarryTarget.Ragdoll)
-                {
-                    _world.Ragdolls.DisplayGrip(local.State.Holding, local.State.Bone, SandboxWorld.Vector(local.State.Grip), _localTarget, _rotation);
-                }
-                else
-                {
-                    Rigidbody body = _world.Building.Root(local.State.Holding)?.GetComponent<Rigidbody>();
-                    if (body)
-                    {
-                        body.position = RigidGrip.Position(body, SandboxWorld.Vector(local.State.Grip), _localTarget, _rotation);
-                        body.rotation = _rotation;
-                    }
-                }
-            }
+            ShowLocalGrip();
 
-            var desired = new HashSet<IntPtr>();
+            bool equipped = false;
             foreach (Grip grip in _grips.Values)
             {
-                if (!grip.State.Equipped)
-                {
-                    continue;
-                }
-
-                PlayerNetworkController avatar = SandboxWorld.Avatar(grip.State.Player);
-                if (!avatar)
-                {
-                    continue;
-                }
-
-                Transform weapons = avatar.WeaponRoot;
-                if (!weapons)
-                {
-                    continue;
-                }
-
-                foreach (Renderer renderer in weapons.GetComponentsInChildren<Renderer>(true))
-                {
-                    desired.Add(renderer.Pointer);
-                    _hidden.TryAdd(renderer.Pointer, (renderer, renderer.enabled));
-                    renderer.enabled = false;
-                }
+                equipped |= grip.State.Equipped;
             }
 
-            FPScontroller movement = _world.LocalMovement;
-            if (UsingTool && movement)
+            if (!equipped && !UsingTool && _hidden.Count == 0 && _managers.Count == 0) return;
+
+            _desired.Clear();
+            HideHeldWeapons();
+            if (UsingTool)
             {
-                foreach (WeaponManager manager in movement.GetComponentsInChildren<WeaponManager>(true))
-                {
-                    _managers.TryAdd(manager.Pointer, (manager, manager.enabled));
-                    manager.enabled = false;
-
-                    foreach (WeaponScript weapon in manager.GetComponentsInChildren<WeaponScript>(true))
-                    {
-                        foreach (Renderer renderer in weapon.GetComponentsInChildren<Renderer>(true))
-                        {
-                            _hidden.TryAdd(renderer.Pointer, (renderer, renderer.enabled));
-                            desired.Add(renderer.Pointer);
-                            renderer.enabled = false;
-                        }
-                    }
-                }
+                HideLocalWeapons();
             }
 
-            foreach (IntPtr key in _hidden.Keys.Where(key => !desired.Contains(key)).ToArray())
-            {
-                var item = _hidden[key];
-                if (item.Renderer)
-                {
-                    item.Renderer.enabled = item.Enabled;
-                }
-
-                _hidden.Remove(key);
-            }
+            ShowWeaponsNoLongerHidden();
 
             if (!UsingTool)
             {
@@ -665,6 +585,116 @@ namespace NullServers.Sandbox
                 }
 
                 _managers.Clear();
+            }
+        }
+
+        // A client moves the object it holds right away, without waiting for the host's next pose.
+        private void ShowLocalGrip()
+        {
+            if (_world.IsHost || !_hasAim || _releasePending || Cursor.lockState != CursorLockMode.Locked) return;
+            if (!_grips.TryGetValue(_world.LocalId, out Grip local) || local.State.Holding <= 0 || local.State.Grip == null) return;
+
+            Vector3 grip = SandboxWorld.Vector(local.State.Grip);
+            if (local.State.Target == CarryTarget.Ragdoll)
+            {
+                _world.Ragdolls.DisplayGrip(local.State.Holding, local.State.Bone, grip, _localTarget, _rotation);
+                return;
+            }
+
+            Rigidbody body = _world.Building.Root(local.State.Holding)?.GetComponent<Rigidbody>();
+            if (!body) return;
+
+            Vector3 position = RigidGrip.Position(body, grip, _localTarget, _rotation);
+            body.transform.SetPositionAndRotation(position, _rotation);
+            body.position = position;
+            body.rotation = _rotation;
+        }
+
+        // Players holding the building hands do not show the weapon in their hands.
+        private void HideHeldWeapons()
+        {
+            foreach (Grip grip in _grips.Values)
+            {
+                if (!grip.State.Equipped) continue;
+
+                PlayerNetworkController avatar = SandboxWorld.Avatar(grip.State.Player);
+                if (!avatar) continue;
+
+                Transform weapons = avatar.WeaponRoot;
+                if (!weapons) continue;
+
+                Hide(Renderers(weapons, () => weapons.GetComponentsInChildren<Renderer>(true).ToArray()));
+            }
+        }
+
+        // The local player's weapons are switched off while a sandbox tool is in use.
+        private void HideLocalWeapons()
+        {
+            FPScontroller movement = _world.LocalMovement;
+            if (!movement) return;
+
+            if (_localManagers.Movement != movement.Pointer || Time.unscaledTime >= _localManagers.Until)
+            {
+                _localManagers = (movement.Pointer, Time.unscaledTime + 0.5f, movement.GetComponentsInChildren<WeaponManager>(true).ToArray());
+            }
+
+            foreach (WeaponManager manager in _localManagers.Managers)
+            {
+                if (!manager) continue;
+
+                _managers.TryAdd(manager.Pointer, (manager, manager.enabled));
+                manager.enabled = false;
+                Hide(Renderers(manager, () => manager.GetComponentsInChildren<WeaponScript>(true)
+                    .SelectMany(weapon => weapon.GetComponentsInChildren<Renderer>(true)).ToArray()));
+            }
+        }
+
+        private void ShowWeaponsNoLongerHidden()
+        {
+            _stale.Clear();
+            foreach (IntPtr key in _hidden.Keys)
+            {
+                if (!_desired.Contains(key))
+                {
+                    _stale.Add(key);
+                }
+            }
+
+            foreach (IntPtr key in _stale)
+            {
+                var item = _hidden[key];
+                if (item.Renderer)
+                {
+                    item.Renderer.enabled = item.Enabled;
+                }
+
+                _hidden.Remove(key);
+            }
+        }
+
+        private Renderer[] Renderers(Component root, Func<Renderer[]> find)
+        {
+            if (_renderers.TryGetValue(root.Pointer, out var cached) && Time.unscaledTime < cached.Until)
+            {
+                return cached.Renderers;
+            }
+
+            if (_renderers.Count > 64) _renderers.Clear();
+
+            Renderer[] renderers = find();
+            _renderers[root.Pointer] = (Time.unscaledTime + 0.5f, renderers);
+            return renderers;
+        }
+
+        private void Hide(Renderer[] renderers)
+        {
+            foreach (Renderer renderer in renderers)
+            {
+                if (!renderer) continue;
+
+                _desired.Add(renderer.Pointer);
+                _hidden.TryAdd(renderer.Pointer, (renderer, renderer.enabled));
+                renderer.enabled = false;
             }
         }
 
@@ -688,6 +718,8 @@ namespace NullServers.Sandbox
 
             _hidden.Clear();
             _managers.Clear();
+            _renderers.Clear();
+            _localManagers = default;
         }
 
         internal void Clear()

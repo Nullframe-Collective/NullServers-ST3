@@ -45,9 +45,14 @@ namespace NullServers.Network
             return true;
         }
 
-        internal static bool TryBroadcast(ReadOnlySpan<byte> data, out int length)
+        // A broadcast starts with its 2-byte key and the packed length of its body.
+        internal static bool TryBroadcast(ReadOnlySpan<byte> data, out ushort key, out int length)
         {
+            key = 0;
             length = 0;
+            if (data.Length < 2) return false;
+
+            key = BinaryPrimitives.ReadUInt16LittleEndian(data);
             Cursor cursor = new(data);
             return cursor.Skip(2) && cursor.Int(out length) && length > 0 && length <= MaxBytes && length <= cursor.Remaining;
         }

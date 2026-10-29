@@ -1,9 +1,13 @@
+using Il2Cpp;
+using Il2CppFishNet.Transporting;
+using Il2CppFishNet.Transporting.Relay;
 using MelonLoader;
 using MelonLoader.Utils;
 using NullServers.Additional;
 using NullServers.Network;
 using NullServers.Players;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace NullServers.Content
 {
@@ -25,7 +29,7 @@ namespace NullServers.Content
         internal int FileIndex;
         internal long FileWritten, FileRequested, Size, Received;
         internal FileStream Output;
-        internal string Partial, Final;
+        internal string Partial, Final, Cached, Source;
         internal Task<string> Check;
 
         internal string Name => Asset.DisplayName;
@@ -34,28 +38,39 @@ namespace NullServers.Content
     internal sealed class ContentDownloads
     {
         private const float Timeout = 20f;
-        private const int Window = 4;
+        private const int Window = 2;
+        private const int RangeSize = 32 * 1024;
 
         private readonly RelaySession _session;
         private readonly PlayerProfiles _profiles;
         private readonly MelonLogger.Instance _logger;
         private readonly string _cache = Path.Combine(MelonEnvironment.UserDataDirectory, "NullFrame", "Downloads");
         private readonly List<DownloadJob> _jobs = new();
-        private readonly List<IDisposable> _mounts = new();
         private readonly HashSet<string> _consent = new(StringComparer.Ordinal);
         private string _consentRoom;
         private float _consentUntil;
+        private float _requestedAt = -1f;
+        private RelayTransport _requestedRelay;
+        private bool _reconnecting;
+        private bool _joining;
         private string _room;
         private float _lastMessage;
         private float _sampleAt;
         private long _sampleBytes;
         private bool _completed;
+        private string _offerRoom;
+        private float _offerPing;
+        private bool _accepted;
 
         internal IReadOnlyList<DownloadJob> Jobs => _jobs;
+        internal AddonPack[] Offered { get; private set; }
         internal bool Busy => _jobs.Count > 0 && !_completed;
+        internal bool Connecting => _requestedAt >= 0f && _jobs.Count == 0 && !_completed && _session.AddonNotice == null;
+        internal bool Visible => Busy || Connecting || Offered != null;
         internal long Total => _jobs.Sum(job => job.Size);
         internal long Received => _jobs.Sum(job => job.Received);
         internal double Speed { get; private set; }
+        internal event Action Requested;
 
         internal ContentDownloads(RelaySession session, PlayerProfiles profiles, MelonLogger.Instance logger)
         {
@@ -65,8 +80,7 @@ namespace NullServers.Content
             profiles.ContentReceivedFromHost += Receive;
         }
 
-        internal static bool Downloadable(AddonPack pack) =>
-            pack.Hash != null && PackFiles.KindOf(pack.Folder) is { } kind && Mountable(kind);
+        internal static bool Downloadable(AddonPack pack) => Problem(pack) == null;
 
         private static FrameworkAddon Addon(PackKind kind) => kind switch
         {
@@ -75,18 +89,183 @@ namespace NullServers.Content
             _ => Frameworks.NPCs
         };
 
-        private static bool Mountable(PackKind kind) =>
-            Addon(kind) is { } addon && Frameworks.Settings.Enabled(addon.Requirement.Id) && addon.Catalog.GetMethod("Mount") != null;
+        private static string Problem(AddonPack pack)
+        {
+            if (pack.Hash == null || PackFiles.KindOf(pack.Folder) is not { } kind)
+            {
+                return pack.Name + " cannot be downloaded from the host yet.";
+            }
 
-        internal static bool CanFetch(AddonNotice notice) =>
-            notice is { Kind: AddonNoticeKind.Content, Missing.Length: 0, Packs.Length: > 0 } && notice.Packs.All(Downloadable);
+            if (Addon(kind) is not { } addon)
+            {
+                return "The framework for " + pack.Name + " is not available.";
+            }
+
+            if (!Frameworks.Settings.Enabled(addon.Requirement.Id))
+            {
+                return addon.Requirement.Id + " is disabled in ADDONS.";
+            }
+
+            return addon.Catalog.GetMethod("Mount") == null
+                ? "Your " + addon.Requirement.Id + " " + addon.Requirement.Version + " is too old to download packs from the host. Update it from our Discord."
+                : null;
+        }
+
+        internal static string Blocker(AddonNotice notice)
+        {
+            if (notice is not { Kind: AddonNoticeKind.Content, Missing.Length: 0, Packs.Length: > 0 })
+            {
+                return "These packs cannot be downloaded from the host.";
+            }
+
+            return notice.Packs.Select(Problem).FirstOrDefault(problem => problem != null);
+        }
+
+        internal static bool CanFetch(AddonNotice notice) => Blocker(notice) == null;
 
         internal void Consent(string room, IEnumerable<AddonPack> packs)
         {
             _consentRoom = room;
             _consentUntil = Time.unscaledTime + 600f;
+            _requestedAt = Time.unscaledTime;
+            _requestedRelay = _session.Relay;
+            _reconnecting = false;
+            _joining = false;
             _consent.Clear();
             _consent.UnionWith(packs.Select(pack => pack.Id + ":" + pack.Hash));
+            Requested?.Invoke();
+        }
+
+        internal bool Ask(FrameworkManifest manifest)
+        {
+            if (Busy || _completed) return false;
+
+            string room = _session.Relay ? _session.Relay.CurrentRoom?.Id : null;
+            AddonPack[] missing = manifest.PackDifferences(FrameworkContent.Create(manifest).For(manifest));
+            if (room == null || missing.Length == 0 || !missing.All(Downloadable)) return false;
+            if (Offered != null && _offerRoom == room) return true;
+
+            Offered = missing;
+            _offerRoom = room;
+            _offerPing = 0f;
+            _logger.Debug($"The room needs {missing.Length} pack(s) from the host. Waiting for download approval.");
+            Requested?.Invoke();
+            return true;
+        }
+
+        internal void Accept()
+        {
+            if (Offered == null) return;
+
+            Consent(_offerRoom, Offered);
+            Offered = null;
+            _accepted = true;
+        }
+
+        internal bool TakeAccepted()
+        {
+            bool accepted = _accepted;
+            _accepted = false;
+            return accepted;
+        }
+
+        internal void Decline()
+        {
+            _logger.Debug("Room content download declined. Leaving the room.");
+            Cancel();
+        }
+
+        private void KeepOffer()
+        {
+            if (Offered == null) return;
+
+            string room = _session.Relay ? _session.Relay.CurrentRoom?.Id : null;
+            if (room != _offerRoom)
+            {
+                Offered = null;
+                _offerRoom = null;
+                return;
+            }
+
+            if (Time.unscaledTime < _offerPing) return;
+
+            _offerPing = Time.unscaledTime + 8f;
+            _profiles.SendContent(new ContentMessage(1, room, ContentStage.ListFiles, Offered[0].Id, Offered[0].Hash), toServer: true);
+        }
+
+        internal void CancelRequest()
+        {
+            _requestedAt = -1f;
+            _requestedRelay = null;
+            _reconnecting = false;
+            _joining = false;
+        }
+
+        private void Connect()
+        {
+            if (_requestedAt < 0f) return;
+
+            RelayTransport relay = _session.Relay;
+            if (!_session.IsNullFrame || _session.IsSwitching || !_session.CommunityAccepted ||
+                !relay || relay != _requestedRelay || _session.AddonNotice != null)
+            {
+                CancelRequest();
+                return;
+            }
+
+            if (Time.unscaledTime - _requestedAt >= 45f)
+            {
+                Fail("Could not connect to the host to download the room content. Please try again.");
+                return;
+            }
+
+            if (relay.CurrentRoom != null)
+            {
+                if (_joining && relay.CurrentRoom.Id != _consentRoom)
+                {
+                    CancelRequest();
+                }
+                else if (_joining && _profiles.Compatibility?.Ready == true)
+                {
+                    CancelRequest();
+                }
+                return;
+            }
+
+            if (_joining) return;
+
+            NetBootstrap bootstrap = NetBootstrap.Current;
+            if (!bootstrap || bootstrap.Network.ClientManager.Started || bootstrap.Network.SceneManager.IteratingQueue ||
+                SceneManager.GetActiveScene().name != bootstrap._menuScene)
+            {
+                return;
+            }
+
+            if (!relay.IsConnectedToRelay)
+            {
+                if (!_reconnecting && relay.ClientTransport.GetConnectionState(false) == LocalConnectionState.Stopped)
+                {
+                    _reconnecting = true;
+                    _logger.Debug("Reconnecting to NullFrame Servers to download the approved room content.");
+                    relay.ConnectToRelay();
+                }
+                return;
+            }
+
+            if (!_session.CanJoin) return;
+
+            _joining = true;
+            if (!bootstrap.JoinRoom(_consentRoom))
+            {
+                if (_session.AddonNotice != null)
+                {
+                    CancelRequest();
+                }
+                else
+                {
+                    Fail("Could not join the room to download its packs. The room may have closed.");
+                }
+            }
         }
 
         internal bool Covers(string room, AddonNotice notice) =>
@@ -99,6 +278,8 @@ namespace NullServers.Content
         {
             if (Busy) return true;
             if (_completed) return false;
+
+            _requestedAt = -1f;
 
             AddonPack[] missing = manifest.PackDifferences(FrameworkContent.Create(manifest).For(manifest));
             string room = _session.Relay ? _session.Relay.CurrentRoom?.Id : null;
@@ -120,20 +301,22 @@ namespace NullServers.Content
                     Kind = kind,
                     Asset = asset,
                     Partial = Path.Combine(_cache, ".partial-" + name),
-                    Final = Path.Combine(_cache, name)
+                    Cached = Path.Combine(_cache, name),
+                    Final = Target(kind, asset)
                 };
 
                 DeletePartial(job);
-                if (Directory.Exists(job.Final))
+                string existing = Directory.Exists(job.Final) ? job.Final : Directory.Exists(job.Cached) ? job.Cached : null;
+                if (existing != null)
                 {
-                    StartCheck(job, job.Final);
+                    StartCheck(job, existing);
                 }
 
                 _jobs.Add(job);
             }
 
             _lastMessage = _sampleAt = Time.unscaledTime;
-            _logger.Msg($"Downloading {_jobs.Count} pack(s) from the host.");
+            _logger.Debug($"Downloading {_jobs.Count} pack(s) from the host.");
             return true;
         }
 
@@ -147,6 +330,9 @@ namespace NullServers.Content
 
         internal void Update()
         {
+            Connect();
+            KeepOffer();
+
             string room = _session.Relay ? _session.Relay.CurrentRoom?.Id : null;
             if (_room != null && room != _room)
             {
@@ -272,9 +458,9 @@ namespace NullServers.Content
         private void RequestRanges(DownloadJob job)
         {
             ContentFile file = job.Files[job.FileIndex];
-            while (job.FileRequested < file.Size && job.FileRequested - job.FileWritten < (long)Window * ContentMessage.MaxRange)
+            while (job.FileRequested < file.Size && job.FileRequested - job.FileWritten < (long)Window * RangeSize)
             {
-                int length = (int)Math.Min(ContentMessage.MaxRange, file.Size - job.FileRequested);
+                int length = (int)Math.Min(RangeSize, file.Size - job.FileRequested);
                 Request(job, ContentStage.Range, file.Name, job.FileRequested, length);
                 job.FileRequested += length;
             }
@@ -303,6 +489,7 @@ namespace NullServers.Content
         private void StartCheck(DownloadJob job, string directory)
         {
             job.State = DownloadState.Checking;
+            job.Source = directory;
             PackKind kind = job.Kind;
             string hash = job.Asset.Hash;
             job.Check = Task.Run(() =>
@@ -333,32 +520,104 @@ namespace NullServers.Content
         private void Publish(DownloadJob job)
         {
             string problem = job.Check.Result;
-            bool cached = !Directory.Exists(job.Partial);
+            bool downloaded = job.Source == job.Partial;
 
-            if (problem != null)
+            if (problem != null && downloaded)
             {
-                if (cached)
-                {
-                    Directory.Delete(job.Final, true);
-                }
-
                 Fail(job.Name + ": " + problem);
                 return;
             }
 
-            if (!cached)
+            if (problem != null)
             {
-                if (Directory.Exists(job.Final))
+                if (job.Source == job.Cached)
                 {
-                    Directory.Delete(job.Final, true);
+                    Directory.Delete(job.Cached, true);
                 }
 
-                Directory.Move(job.Partial, job.Final);
+                job.Source = null;
+                job.Check = null;
+                job.State = DownloadState.Queued;
+                return;
+            }
+
+            if (job.Source != job.Final)
+            {
+                Install(job);
             }
 
             job.State = DownloadState.Ready;
-            _logger.Msg($"{job.Name}: checks passed ({(cached ? "cached" : job.Size + " bytes")}).");
+            _logger.Msg($"{job.Name}: checks passed ({(downloaded ? job.Size + " bytes" : "already installed")}), {Relative(job.Final)}.");
         }
+
+        private void Install(DownloadJob job)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(job.Final));
+
+            foreach (string path in Conflicts(job.Kind, job.Asset).Append(job.Final).Distinct(StringComparer.OrdinalIgnoreCase).ToArray())
+            {
+                if (!Directory.Exists(path)) continue;
+
+                string backup = Path.Combine(MelonEnvironment.UserDataDirectory, "NullFrame", "Replaced", PackFiles.Folder(job.Kind),
+                    Path.GetFileName(path) + " " + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+                Directory.CreateDirectory(Path.GetDirectoryName(backup));
+                Directory.Move(path, backup);
+                _logger.Msg($"Moved {Relative(path)} to {Relative(backup)}; the room uses a different version.");
+            }
+
+            Directory.Move(job.Source, job.Final);
+
+            if (job.Source != job.Cached && Directory.Exists(job.Cached))
+            {
+                Directory.Delete(job.Cached, true);
+            }
+        }
+
+        private static string Target(PackKind kind, FrameworkAsset asset)
+        {
+            const string Legacy = "legacy:";
+            string root = Path.GetFullPath(Path.Combine(MelonEnvironment.UserDataDirectory, PackFiles.Folder(kind)));
+
+            if (kind != PackKind.NPC && asset.Id.StartsWith(Legacy, StringComparison.Ordinal))
+            {
+                string name = asset.Id[Legacy.Length..];
+                string folder = string.Equals(asset.Folder, name, StringComparison.OrdinalIgnoreCase) && PackFiles.SafeFolder(asset.Folder) ? asset.Folder : name;
+                return Path.Combine(root, PackFiles.SafeFolder(folder) ? folder : asset.Id.Replace(':', '_'));
+            }
+
+            string baseName = PackFiles.SafeFolder(asset.DisplayName) ? asset.DisplayName :
+                PackFiles.SafeFolder(asset.Folder) ? asset.Folder : asset.Id.Replace(':', '_');
+            string[] owned = Conflicts(kind, asset).ToArray();
+            string path = Path.Combine(root, baseName);
+
+            for (int index = 2; Directory.Exists(path) && !owned.Contains(Path.GetFullPath(path), StringComparer.OrdinalIgnoreCase); index++)
+            {
+                path = Path.Combine(root, $"{baseName} ({index})");
+            }
+
+            return path;
+        }
+
+        private static IEnumerable<string> Conflicts(PackKind kind, FrameworkAsset asset)
+        {
+            FrameworkAddon addon = Addon(kind);
+            string root = Path.GetFullPath(Path.Combine(MelonEnvironment.UserDataDirectory, PackFiles.Folder(kind)));
+
+            foreach (object item in addon?.Installed ?? Enumerable.Empty<object>())
+            {
+                string path = addon.Text(item, "Path");
+                if (string.IsNullOrEmpty(path) || addon.Text(item, "Id") != asset.Id && addon.Text(item, "Name") != asset.DisplayName) continue;
+
+                string full = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (string.Equals(Path.GetDirectoryName(full), root, StringComparison.OrdinalIgnoreCase))
+                {
+                    yield return full;
+                }
+            }
+        }
+
+        private static string Relative(string path) =>
+            Path.GetRelativePath(MelonEnvironment.GameRootDirectory, path).Replace('\\', '/');
 
         private void Mount()
         {
@@ -368,7 +627,7 @@ namespace NullServers.Content
                 foreach (DownloadJob job in _jobs)
                 {
                     FrameworkAddon addon = Addon(job.Kind);
-                    _mounts.Add(addon.Call<IDisposable>(addon.Catalog, "Mount", job.Final, job.Asset.Id));
+                    addon.Call<IDisposable>(addon.Catalog, "Mount", job.Final, job.Asset.Id);
                 }
             }
             catch (Exception exception) when (exception is System.Reflection.TargetInvocationException or InvalidOperationException or ArgumentException)
@@ -379,12 +638,14 @@ namespace NullServers.Content
 
             _session.RefreshAddons();
             _completed = true;
-            _logger.Msg("Room content is ready.");
+            _logger.Debug("Room content is ready.");
         }
 
         internal void Cancel()
         {
             Reset();
+            _consent.Clear();
+            _consentRoom = null;
             if (_session.Relay)
             {
                 _session.Relay.StopConnection(false);
@@ -395,7 +656,7 @@ namespace NullServers.Content
         {
             _logger.Warning("Content download failed: " + reason);
             Reset();
-            _session.ShowAddonError("Download failed. " + reason, AddonNoticeKind.Unavailable);
+            _session.ShowAddonError(reason, AddonNoticeKind.Download);
 
             if (_session.Relay)
             {
@@ -412,19 +673,11 @@ namespace NullServers.Content
             }
 
             _jobs.Clear();
-            if (_mounts.Count > 0)
-            {
-                Frameworks.RestoreContent();
-                foreach (IDisposable mount in _mounts)
-                {
-                    mount?.Dispose();
-                }
-
-                _mounts.Clear();
-                _session.RefreshAddons();
-            }
-
             _completed = false;
+            Offered = null;
+            _offerRoom = null;
+            _accepted = false;
+            CancelRequest();
             _room = null;
             Speed = 0;
             _sampleBytes = 0;

@@ -1,7 +1,6 @@
 ﻿using Il2Cpp;
 using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
-using NullServers.Network;
 using NullServers.Additional;
 using UnityEngine;
 
@@ -64,6 +63,8 @@ namespace NullServers.Customization
         private readonly List<Transform> _hats = new();
         private readonly HashSet<string> _selected;
         private readonly bool _customHead;
+        private IntPtr[] _applied;
+        private float _checkAt;
 
         internal RagdollVisual(GameObject root, RagdollSkin skin, SkinTextures textures)
         {
@@ -116,10 +117,19 @@ namespace NullServers.Customization
             Update();
         }
 
+        // Repaints the ragdoll when its skin images change. Twice per second it also checks
+        // that the game did not swap our materials back, and repaints if it did.
         internal void Update()
         {
             Appearance appearance = _skin.Appearance;
             Texture2D[] images = _textures.Get(appearance);
+            IntPtr[] current = images.Select(image => image ? image.Pointer : IntPtr.Zero).ToArray();
+            bool changed = _applied == null || !current.AsSpan().SequenceEqual(_applied);
+
+            if (!changed && Time.unscaledTime < _checkAt) return;
+
+            _checkAt = Time.unscaledTime + 0.5f;
+            _applied = current;
             ColorUtility.TryParseHtmlString(appearance.FurColor, out Color fur);
 
             foreach (Transform hat in _hats)
@@ -137,60 +147,76 @@ namespace NullServers.Customization
             {
                 if (!surface.Renderer) continue;
 
-                Material[] current = surface.Renderer.sharedMaterials.ToArray();
-                if (current.Length != surface.Materials.Length || current.Where((material, index) =>
-                    !material || !surface.Materials[index] || material.Pointer != surface.Materials[index].Pointer).Any())
+                bool replaced = RestoreMaterials(surface);
+                Texture2D image = ShowPart(surface, images);
+                if (surface.Materials.Length > 0 && (changed || replaced))
                 {
-                    surface.Renderer.sharedMaterials = new Il2CppReferenceArray<Material>(surface.Materials);
+                    Paint(surface, image, fur);
                 }
+            }
+        }
 
-                int part = Math.Max(0, surface.Part);
-                Texture2D image = images[part];
+        private static bool RestoreMaterials(Surface surface)
+        {
+            Material[] assigned = surface.Renderer.sharedMaterials.ToArray();
+            bool same = assigned.Length == surface.Materials.Length && !assigned.Where((material, index) =>
+                !material || !surface.Materials[index] || material.Pointer != surface.Materials[index].Pointer).Any();
+            if (same) return false;
 
-                if (surface.Part == -1 && _customHead)
+            surface.Renderer.sharedMaterials = new Il2CppReferenceArray<Material>(surface.Materials);
+            return true;
+        }
+
+        // Returns the image for this surface. The model's own head hides when the custom head has an image.
+        private Texture2D ShowPart(Surface surface, Texture2D[] images)
+        {
+            Texture2D image = images[Math.Max(0, surface.Part)];
+            if (surface.Part == -1 && _customHead)
+            {
+                surface.Renderer.enabled = !images[0];
+                return null;
+            }
+
+            if (surface.Part == 0)
+            {
+                surface.Renderer.gameObject.SetActive(image);
+                surface.Renderer.enabled = image;
+            }
+            else
+            {
+                surface.Renderer.enabled = true;
+                surface.Renderer.forceRenderingOff = false;
+            }
+
+            return image;
+        }
+
+        private static void Paint(Surface surface, Texture2D image, Color fur)
+        {
+            Material material = surface.Materials[0];
+            if (!material) return;
+
+            if (surface.Originals[0])
+            {
+                material.CopyPropertiesFromMaterial(surface.Originals[0]);
+            }
+
+            material.color = image ? Color.white : fur;
+            if (!image) return;
+
+            if (surface.Part > 0)
+            {
+                Shader shader = Shader.Find("Diffuse");
+                if (shader)
                 {
-                    surface.Renderer.enabled = !images[0];
-                    image = null;
+                    material.shader = shader;
                 }
-                else if (surface.Part == 0)
-                {
-                    surface.Renderer.gameObject.SetActive(image);
-                    surface.Renderer.enabled = image;
-                }
-                else
-                {
-                    surface.Renderer.enabled = true;
-                    surface.Renderer.forceRenderingOff = false;
-                }
+            }
 
-                if (surface.Materials.Length > 0)
-                {
-                    Material material = surface.Materials[0];
-                    if (!material) continue;
-
-                    if (surface.Originals[0])
-                    {
-                        material.CopyPropertiesFromMaterial(surface.Originals[0]);
-                    }
-
-                    material.color = image ? Color.white : fur;
-                    if (!image) continue;
-
-                    if (surface.Part > 0)
-                    {
-                        Shader shader = Shader.Find("Diffuse");
-                        if (shader)
-                        {
-                            material.shader = shader;
-                        }
-                    }
-
-                    material.mainTexture = image;
-                    if (material.HasProperty("_TopMainTex"))
-                    {
-                        material.SetTexture("_TopMainTex", image);
-                    }
-                }
+            material.mainTexture = image;
+            if (material.HasProperty("_TopMainTex"))
+            {
+                material.SetTexture("_TopMainTex", image);
             }
         }
 

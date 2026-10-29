@@ -1,7 +1,5 @@
-using HarmonyLib;
 using Il2Cpp;
 using Il2CppFishNet.Object;
-using UnityEngine;
 
 namespace NullServers.Server
 {
@@ -12,17 +10,13 @@ namespace NullServers.Server
         private bool _placingConsole;
         private NetworkObject _console;
 
-        internal HostTools(HarmonyLib.Harmony harmony, ServerControl control)
+        internal HostTools(ServerControl control)
         {
             _instance = this;
             _control = control;
-
-            harmony.Patch(
-                AccessTools.Method(typeof(Volume), nameof(Volume.OnStartServer)),
-                prefix: new HarmonyMethod(typeof(HostTools), nameof(BeforeConsoleStart)));
         }
 
-        private static bool BeforeConsoleStart(Volume __instance)
+        internal static bool BeforeConsoleStart(Volume __instance)
         {
             return !(_instance._placingConsole || (_instance._console && __instance.NetworkObject == _instance._console)) ||
                 !_instance._control.CanManage ||

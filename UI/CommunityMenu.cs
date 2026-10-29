@@ -1,5 +1,4 @@
-﻿using HarmonyLib;
-using Il2Cpp;
+﻿using Il2Cpp;
 using MelonLoader;
 using NullServers.Additional;
 using NullServers.Network;
@@ -34,20 +33,15 @@ namespace NullServers.UI
 
         internal bool Visible => _root;
 
-        internal CommunityMenu(HarmonyLib.Harmony harmony, RelaySession session, MelonLogger.Instance logger)
+        internal CommunityMenu(RelaySession session, MelonLogger.Instance logger)
         {
             _instance = this;
             _session = session;
             _logger = logger;
             session.AccessDenied += Denied;
-
-            foreach (Type type in new[] { typeof(MainMenu), typeof(LobbyMenu) })
-            {
-                harmony.Patch(AccessTools.Method(type, "OnGUI"), prefix: new HarmonyMethod(typeof(CommunityMenu), nameof(BeforeGUI)));
-            }
         }
 
-        private static bool BeforeGUI() => !_instance.Visible;
+        internal static bool BeforeGUI() => !_instance.Visible;
 
         internal void Enter(Action enter)
         {
@@ -62,6 +56,8 @@ namespace NullServers.UI
             MelonCoroutines.Start(Check(++_generation));
         }
 
+        // Shows the rules (until accepted once), waits for the global blacklist and the update log,
+        // then lets the player in or explains why they cannot play.
         private IEnumerator Check(int generation)
         {
             _session.Blacklist.Refresh();
@@ -95,36 +91,28 @@ namespace NullServers.UI
                 yield return null;
             }
 
-            if (generation != _generation)
-            {
-                yield break;
-            }
+            if (generation != _generation) yield break;
 
             _updatesCancellation.Dispose();
             _updatesCancellation = null;
+            Complete(updates);
+        }
 
+        private void Complete(Task<string> updates)
+        {
             if (!_session.Blacklist.Ready)
             {
                 Denied(GlobalBlacklist.UnavailableMessage);
-                yield break;
+                return;
             }
 
             if (_session.Blacklist.Contains(_session.Relay?.LocalIdentity?.Username))
             {
                 Denied(GlobalBlacklist.BannedMessage);
-                yield break;
+                return;
             }
 
-            string text = null;
-            try
-            {
-                text = updates.GetAwaiter().GetResult();
-            }
-            catch (Exception exception)
-            {
-                _logger.Warning("Community update log could not be loaded: " + exception.Message);
-            }
-
+            string text = ReadUpdates(updates);
             if (_preferences.Next(text) == CommunityPrompt.Updates)
             {
                 Show(new Notice("Update Log", text, "OK", () =>
@@ -136,6 +124,20 @@ namespace NullServers.UI
             else
             {
                 Finish();
+            }
+        }
+
+        // A missing update log never blocks the player.
+        private string ReadUpdates(Task<string> updates)
+        {
+            try
+            {
+                return updates.GetAwaiter().GetResult();
+            }
+            catch (Exception exception)
+            {
+                _logger.Warning("Community update log could not be loaded: " + exception.Message);
+                return null;
             }
         }
 

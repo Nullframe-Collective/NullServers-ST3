@@ -5,7 +5,6 @@ using MelonLoader.Utils;
 using NullServers.Network;
 using System.Collections;
 using System.Reflection;
-using UnityEngine;
 
 namespace NullServers.Additional
 {
@@ -142,6 +141,7 @@ namespace NullServers.Additional
             if (Requirement.Id is Dependencies.Weapons or Dependencies.NPCs && Enabled)
             {
                 Core.GetMethod(nameof(MelonMod.OnSceneWasInitialized))?.Invoke(_mod, new object[] { index, name });
+                Catalog.GetMethod("Refresh", Type.EmptyTypes)?.Invoke(null, null);
             }
         }
 
@@ -274,6 +274,8 @@ namespace NullServers.Additional
 
         internal static string Problem(string id)
         {
+            if (Dependencies.Optional.Contains(id)) return null;
+
             FrameworkAddon addon = id == Dependencies.Weapons ? Weapons : id == Dependencies.NPCs ? NPCs :
                 id == Dependencies.Modes ? Modes : id == Dependencies.Maps ? Maps : Customization;
 

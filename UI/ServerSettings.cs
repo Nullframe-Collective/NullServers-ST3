@@ -24,6 +24,8 @@ namespace NullServers.UI
         private CanvasGroup _controls;
         private Text _status, _preview, _protection;
         private Slider _fogEnd;
+        private float? _flightSpeed;
+        private float _flightSpeedAt;
         private string _roomId, _name, _capacity, _color, _scene, _mode, _minutes, _custards, _message, _state;
         private RenderOptions _render;
         private int _tab, _difficulty;
@@ -52,6 +54,12 @@ namespace NullServers.UI
             }
 
             _controls.interactable = !_control.Busy;
+            if (_flightSpeed is { } speed && Time.unscaledTime >= _flightSpeedAt)
+            {
+                _flightSpeed = null;
+                _control.Access.SetEnvironment(_control.Access.Environment with { FlightSpeed = speed }, out _message);
+            }
+
             _status.text = _message ?? _control.Access.Status ?? _control.Status ?? "Room management";
             _picker.Update();
 
@@ -305,6 +313,18 @@ namespace NullServers.UI
                 _control.Access.SetEnvironment(_control.Access.Environment with { KeepRagdolls = value }, out _message));
             Check("Throw Any One", _control.Access.Environment.ThrowAnyone, value =>
                 _control.Access.SetEnvironment(_control.Access.Environment with { ThrowAnyone = value }, out _message));
+            Check("Allow flight for everyone (X)", _control.Access.Environment.AllowFlight, value =>
+                _control.Access.SetEnvironment(_control.Access.Environment with { AllowFlight = value }, out _message));
+            Check("Flight passes through objects", _control.Access.Environment.FlightNoclip, value =>
+                _control.Access.SetEnvironment(_control.Access.Environment with { FlightNoclip = value }, out _message));
+            Slider speed = Range("Flight speed", _control.Access.Environment.FlightSpeed, EnvironmentSettings.MinFlightSpeed, EnvironmentSettings.MaxFlightSpeed, value =>
+            {
+                _flightSpeed = Mathf.Round(value * 2f) / 2f;
+                _flightSpeedAt = Time.unscaledTime + 0.4f;
+            });
+            speed.interactable = _control.CanManage;
+            Check("Allow prone for everyone (C)", _control.Access.Environment.AllowProne, value =>
+                _control.Access.SetEnvironment(_control.Access.Environment with { AllowProne = value }, out _message));
         }
 
         private void Round()
@@ -405,13 +425,24 @@ namespace NullServers.UI
             RectTransform row = Line();
             _ui.Label(row, title, 26);
             RectTransform box = GameUi.Rect("Check", row);
-            GameUi.Area(box, 0.88f, 0.1f, 0.96f, 0.9f);
-            Image background = _ui.Image(box, new Color(1f, 1f, 1f, 0.15f));
+            box.anchorMin = box.anchorMax = new Vector2(1f, 0.5f);
+            box.pivot = new Vector2(1f, 0.5f);
+            box.sizeDelta = Vector2.one * (40f * _ui.Unit);
+            box.anchoredPosition = new Vector2(-10f * _ui.Unit, 0f);
+            Image background = _ui.Image(box, Color.white);
             Toggle toggle = GameUi.Add<Toggle>(box.gameObject);
+            ColorBlock colors = toggle.colors;
+            colors.normalColor = colors.selectedColor = new Color(0f, 0f, 0f, 0.28f);
+            colors.highlightedColor = new Color(0f, 0f, 0f, 0.48f);
+            colors.pressedColor = new Color(0f, 0f, 0f, 0.65f);
+            colors.disabledColor = new Color(0f, 0f, 0f, 0.12f);
+            colors.fadeDuration = 0.1f;
+            toggle.colors = colors;
+            _ui.Frame(toggle);
             RectTransform check = GameUi.Rect("Mark", box);
-            GameUi.Area(check, 0.2f, 0.2f, 0.8f, 0.8f);
+            GameUi.Area(check, 0.24f, 0.24f, 0.76f, 0.76f);
             toggle.targetGraphic = background;
-            toggle.graphic = _ui.Image(check, new Color(0.3f, 0.9f, 0.4f));
+            toggle.graphic = _ui.Image(check, new Color(1f, 1f, 1f, 0.9f), false);
             toggle.SetIsOnWithoutNotify(value);
             toggle.interactable = _control.CanManage;
             toggle.onValueChanged.AddListener(DelegateSupport.ConvertDelegate<UnityAction<bool>>(changed));

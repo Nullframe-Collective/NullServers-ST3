@@ -43,6 +43,7 @@ namespace NullServers.Customization
             pause.Add("Customization", Open, () => pause.Available);
         }
 
+        // Replaces the pause menu with the customization page: the model preview on the left, the tabs on the right.
         private void Open()
         {
             if (!_appearance.Local || !_pause.Hide(this)) return;
@@ -51,25 +52,8 @@ namespace NullServers.Customization
             {
                 _source = _appearance.Local;
                 _menu = _pause.Menu;
-                _draft = LiveAppearance.Read(_source);
+                LoadDraft();
 
-                if (!_draft.UseSkin)
-                {
-                    _draft = _draft with
-                    {
-                        HeadUrl = ObscuredPrefs.GetString("HeadURL"),
-                        BodyUrl = ObscuredPrefs.GetString("BodyURL"),
-                        ArmsUrl = ObscuredPrefs.GetString("ArmsURL"),
-                        LegsUrl = ObscuredPrefs.GetString("LegsURL")
-                    };
-                }
-
-                _shown = _draft;
-                _nickname = string.IsNullOrWhiteSpace(_profiles.Local.Nickname) ? _profiles.DefaultName : _profiles.Local.Nickname;
-                _nameColor = _profiles.Local.ColorHex;
-                _gradientColor = _profiles.Local.GradientColor;
-                _colorMode = _profiles.Local.ColorMode;
-                _colorSpeed = _profiles.Local.ColorSpeed;
                 _message = null;
                 _dragging = false;
                 _mouse = Input.mousePosition;
@@ -81,55 +65,8 @@ namespace NullServers.Customization
                 _picker = new GameColorPicker(_ui, _root);
                 _choices = new GameChoices(_ui, _root);
 
-                Text title = _ui.Label(_root, "Customization", 42);
-                GameUi.Area(title.rectTransform, 0.48f, 0.82f, 0.93f, 0.91f);
-                _tabs.Clear();
-                string[] tabs = ["Profile", "Skin"];
-
-                for (int index = 0; index < tabs.Length; index++)
-                {
-                    int tab = index;
-                    Button button = _ui.Button(_root, tabs[index], () =>
-                    {
-                        _tab = tab;
-                        Page();
-                    });
-                    GameUi.Area(button.GetComponent<RectTransform>(), 0.48f + index * 0.23f, 0.75f, 0.7f + index * 0.23f, 0.81f);
-                    _tabs.Add(button);
-                }
-
-                _name = _ui.Label(_root, "", 32, TextAnchor.MiddleCenter);
-                _name.supportRichText = true;
-                GameUi.Fit(_name, Mathf.RoundToInt(24f * _ui.Unit), Mathf.RoundToInt(40f * _ui.Unit));
-                GameUi.Area(_name.rectTransform, 0.08f, 0.79f, 0.43f, 0.85f);
-                RectTransform health = GameUi.Rect("PreviewHealth", _root);
-                GameUi.Area(health, 0.14f, 0.78f, 0.37f, 0.786f);
-                _ui.Image(health, new Color(0.1f, 0.92f, 0.15f), false);
-
-                _model = GameUi.Rect("ModelPreview", _root);
-                GameUi.Area(_model, 0.08f, 0.34f, 0.43f, 0.77f);
-                _ui.Image(_model, new Color(1f, 1f, 1f, 0.005f));
-                RectTransform image = GameUi.Rect("ModelImage", _model);
-                RawImage model = GameUi.Add<RawImage>(image.gameObject);
-                model.texture = _preview.Texture;
-                model.raycastTarget = false;
-                AspectRatioFitter aspect = GameUi.Add<AspectRatioFitter>(image.gameObject);
-                aspect.aspectMode = AspectRatioFitter.AspectMode.FitInParent;
-                aspect.aspectRatio = (float)_preview.Texture.width / _preview.Texture.height;
-                Text hint = _ui.Label(_root, "Drag to rotate · Scroll to zoom", 22, TextAnchor.MiddleCenter);
-                GameUi.Area(hint.rectTransform, 0.08f, 0.305f, 0.43f, 0.34f);
-
-                RectTransform zoom = GameUi.Rect("PreviewZoom", _root);
-                GameUi.Area(zoom, 0.08f, 0.24f, 0.43f, 0.295f);
-                _zoom = _ui.Range(zoom, "Zoom", _preview.Zoom, 0.7f, 2.5f, value => _preview.Zoom = value);
-                RectTransform light = GameUi.Rect("PreviewLight", _root);
-                GameUi.Area(light, 0.08f, 0.18f, 0.43f, 0.235f);
-                _ui.Range(light, "Preview Light", _lighting, 0.15f, 2f, value => _lighting = value);
-                Button rotate = _ui.Button(_root, "", () => _preview.AutoRotate = !_preview.AutoRotate);
-                GameUi.Area(rotate.GetComponent<RectTransform>(), 0.08f, 0.11f, 0.43f, 0.17f);
-                _rotate = rotate.GetComponentInChildren(Il2CppType.Of<Text>(), true).Cast<Text>();
-                Button back = _ui.Button(_root, "BACK", Close);
-                GameUi.Area(back.GetComponent<RectTransform>(), 0.08f, 0.035f, 0.26f, 0.095f);
+                BuildTabs();
+                BuildPreview();
 
                 _scroll = _ui.Scroll(_root, "AppearancePages");
                 GameUi.Area(_scroll.GetComponent<RectTransform>(), 0.48f, 0.23f, 0.93f, 0.73f);
@@ -145,6 +82,86 @@ namespace NullServers.Customization
                 Close();
                 throw;
             }
+        }
+
+        // The draft starts from what the player wears now. Without a skin the game's saved part URLs are used.
+        private void LoadDraft()
+        {
+            _draft = LiveAppearance.Read(_source);
+            if (!_draft.UseSkin)
+            {
+                _draft = _draft with
+                {
+                    HeadUrl = ObscuredPrefs.GetString("HeadURL"),
+                    BodyUrl = ObscuredPrefs.GetString("BodyURL"),
+                    ArmsUrl = ObscuredPrefs.GetString("ArmsURL"),
+                    LegsUrl = ObscuredPrefs.GetString("LegsURL")
+                };
+            }
+
+            _shown = _draft;
+            _nickname = string.IsNullOrWhiteSpace(_profiles.Local.Nickname) ? _profiles.DefaultName : _profiles.Local.Nickname;
+            _nameColor = _profiles.Local.ColorHex;
+            _gradientColor = _profiles.Local.GradientColor;
+            _colorMode = _profiles.Local.ColorMode;
+            _colorSpeed = _profiles.Local.ColorSpeed;
+        }
+
+        private void BuildTabs()
+        {
+            Text title = _ui.Label(_root, "Customization", 42);
+            GameUi.Area(title.rectTransform, 0.48f, 0.82f, 0.93f, 0.91f);
+            _tabs.Clear();
+            string[] tabs = ["Profile", "Skin"];
+
+            for (int index = 0; index < tabs.Length; index++)
+            {
+                int tab = index;
+                Button button = _ui.Button(_root, tabs[index], () =>
+                {
+                    _tab = tab;
+                    Page();
+                });
+                GameUi.Area(button.GetComponent<RectTransform>(), 0.48f + index * 0.23f, 0.75f, 0.7f + index * 0.23f, 0.81f);
+                _tabs.Add(button);
+            }
+        }
+
+        // The preview shows the player's name and health bar above the model, like in game.
+        private void BuildPreview()
+        {
+            _name = _ui.Label(_root, "", 32, TextAnchor.MiddleCenter);
+            _name.supportRichText = true;
+            GameUi.Fit(_name, Mathf.RoundToInt(24f * _ui.Unit), Mathf.RoundToInt(40f * _ui.Unit));
+            GameUi.Area(_name.rectTransform, 0.08f, 0.79f, 0.43f, 0.85f);
+            RectTransform health = GameUi.Rect("PreviewHealth", _root);
+            GameUi.Area(health, 0.14f, 0.78f, 0.37f, 0.786f);
+            _ui.Image(health, new Color(0.1f, 0.92f, 0.15f), false);
+
+            _model = GameUi.Rect("ModelPreview", _root);
+            GameUi.Area(_model, 0.08f, 0.34f, 0.43f, 0.77f);
+            _ui.Image(_model, new Color(1f, 1f, 1f, 0.005f));
+            RectTransform image = GameUi.Rect("ModelImage", _model);
+            RawImage model = GameUi.Add<RawImage>(image.gameObject);
+            model.texture = _preview.Texture;
+            model.raycastTarget = false;
+            AspectRatioFitter aspect = GameUi.Add<AspectRatioFitter>(image.gameObject);
+            aspect.aspectMode = AspectRatioFitter.AspectMode.FitInParent;
+            aspect.aspectRatio = (float)_preview.Texture.width / _preview.Texture.height;
+            Text hint = _ui.Label(_root, "Drag to rotate · Scroll to zoom", 22, TextAnchor.MiddleCenter);
+            GameUi.Area(hint.rectTransform, 0.08f, 0.305f, 0.43f, 0.34f);
+
+            RectTransform zoom = GameUi.Rect("PreviewZoom", _root);
+            GameUi.Area(zoom, 0.08f, 0.24f, 0.43f, 0.295f);
+            _zoom = _ui.Range(zoom, "Zoom", _preview.Zoom, 0.7f, 2.5f, value => _preview.Zoom = value);
+            RectTransform light = GameUi.Rect("PreviewLight", _root);
+            GameUi.Area(light, 0.08f, 0.18f, 0.43f, 0.235f);
+            _ui.Range(light, "Preview Light", _lighting, 0.15f, 2f, value => _lighting = value);
+            Button rotate = _ui.Button(_root, "", () => _preview.AutoRotate = !_preview.AutoRotate);
+            GameUi.Area(rotate.GetComponent<RectTransform>(), 0.08f, 0.11f, 0.43f, 0.17f);
+            _rotate = rotate.GetComponentInChildren(Il2CppType.Of<Text>(), true).Cast<Text>();
+            Button back = _ui.Button(_root, "BACK", Close);
+            GameUi.Area(back.GetComponent<RectTransform>(), 0.08f, 0.035f, 0.26f, 0.095f);
         }
 
         private void Close()

@@ -1,5 +1,4 @@
-﻿using HarmonyLib;
-using Il2Cpp;
+﻿using Il2Cpp;
 using Il2CppFishNet.Connection;
 using Il2CppFishNet.Transporting.Relay;
 using MelonLoader.Utils;
@@ -50,7 +49,7 @@ namespace NullServers.Server
         internal IReadOnlyList<BanEntry> Bans => _control.CanManage ? _control.Bans.Entries : _state?.Bans ?? Array.Empty<BanEntry>();
         internal IReadOnlyList<BanEntry> MutedAccounts => _control.CanManage ? Mutes.Entries : _state?.Mutes ?? Array.Empty<BanEntry>();
 
-        internal ServerAccess(HarmonyLib.Harmony harmony, ServerControl control, RelaySession session, PlayerProfiles profiles)
+        internal ServerAccess(ServerControl control, RelaySession session, PlayerProfiles profiles)
         {
             _instance = this;
             _control = control;
@@ -59,10 +58,6 @@ namespace NullServers.Server
 
             profiles.ServerMessageReceived += ReceiveRequest;
             profiles.ServerMessageReceivedFromHost += ReceiveState;
-
-            harmony.Patch(
-                AccessTools.Method(typeof(MultiplayerChat), nameof(MultiplayerChat.NBHNJMHGGCL)),
-                prefix: new HarmonyMethod(typeof(ServerAccess), nameof(BeforeChatMessage)));
         }
 
         internal void Update()
@@ -70,19 +65,12 @@ namespace NullServers.Server
             string roomId = InRoom ? _control.Room.Id : null;
             if (_roomId != roomId)
             {
-                _roomId = roomId;
-                _state = null;
-                _permissions.Clear();
-                _sentStates.Clear();
-                _lastRequest.Clear();
-                _lastMuteNotice.Clear();
-                Status = _pendingNotice = null;
-                _nextState = 0f;
-                _environment = new EnvironmentSettings();
+                ResetForRoom(roomId);
             }
 
-            _control.Rendering.Update(InRoom && RoomMultiplayerMenu.Current?.IsInitialized == true, Environment.Rendering);
-            _control.Rendering.Geometry.Update(InRoom && RoomMultiplayerMenu.Current?.IsInitialized == true, Environment.World);
+            bool ready = InRoom && RoomMultiplayerMenu.Current?.IsInitialized == true;
+            _control.Rendering.Update(ready, Environment.Rendering);
+            _control.Rendering.Geometry.Update(ready, Environment.World);
 
             if (_pendingNotice != null && MultiplayerChat.Current && RoomMultiplayerMenu.Current?.IsInitialized == true)
             {
@@ -93,6 +81,27 @@ namespace NullServers.Server
             if (!_control.CanManage || Time.unscaledTime < _nextState) return;
 
             _nextState = Time.unscaledTime + 1f;
+            RevokeLeftAdmins();
+            SendStates(roomId);
+            ForgetDisconnected();
+        }
+
+        private void ResetForRoom(string roomId)
+        {
+            _roomId = roomId;
+            _state = null;
+            _permissions.Clear();
+            _sentStates.Clear();
+            _lastRequest.Clear();
+            _lastMuteNotice.Clear();
+            Status = _pendingNotice = null;
+            _nextState = 0f;
+            _environment = new EnvironmentSettings();
+        }
+
+        // Administrator rights end when the player leaves or is no longer on the host's admin list.
+        private void RevokeLeftAdmins()
+        {
             foreach (int id in _permissions.Clients.ToArray())
             {
                 if (!_control.Manager.ServerManager.Clients.ContainsKey(id) ||
@@ -102,7 +111,12 @@ namespace NullServers.Server
                     _permissions.Revoke(id);
                 }
             }
+        }
 
+        // Once per second the host sends every client the server state, but only when it changed for that client.
+        // Only administrators get the ban and mute lists.
+        private void SendStates(string roomId)
+        {
             RoomPlayer[] players = HostPlayers();
             foreach (NetworkConnection connection in _control.Connections())
             {
@@ -117,10 +131,7 @@ namespace NullServers.Server
                     _environment);
                 string json = JsonSerializer.Serialize(state);
 
-                if (_sentStates.GetValueOrDefault(connection.ClientId) == json)
-                {
-                    continue;
-                }
+                if (_sentStates.GetValueOrDefault(connection.ClientId) == json) continue;
 
                 _sentStates[connection.ClientId] = json;
                 _profiles.SendServerMessage(new ServerMessage(1, roomId, State: state), connection);
@@ -131,7 +142,10 @@ namespace NullServers.Server
                     NotifyMuted(connection);
                 }
             }
+        }
 
+        private void ForgetDisconnected()
+        {
             foreach (int id in _sentStates.Keys.ToArray())
             {
                 if (!_control.Manager.ServerManager.Clients.ContainsKey(id))
@@ -308,10 +322,16 @@ namespace NullServers.Server
             }
 
             ServerRequest request = message.Request;
-            if (request.Environment is { } environment &&
-                (environment.KeepRagdolls != _environment.KeepRagdolls || environment.ThrowAnyone != _environment.ThrowAnyone))
+            if (request.Environment is { } environment && environment.KeepRagdolls != _environment.KeepRagdolls)
             {
-                Notice(id, "Only the host can change ragdoll persistence and Throw Any One.");
+                Notice(id, "Only the host can change ragdoll persistence.");
+                return;
+            }
+
+            if (request.Action is ServerAction.Kick or ServerAction.Ban or ServerAction.Mute &&
+                (request.PlayerId == id || IsAdministrator(request.PlayerId) || _permissions.Contains(request.Account)))
+            {
+                Notice(id, "Administrators cannot kick, ban or mute themselves, other administrators or the host.");
                 return;
             }
 
@@ -389,7 +409,7 @@ namespace NullServers.Server
             Notice(connection.ClientId, "The host muted your chat. You cannot send messages until you are unmuted.");
         }
 
-        private static bool BeforeChatMessage(NetworkConnection __2)
+        internal static bool BeforeChatMessage(NetworkConnection __2)
         {
             ServerAccess instance = _instance;
             if (!instance._control.CanManage ||

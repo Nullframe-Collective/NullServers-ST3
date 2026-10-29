@@ -54,7 +54,7 @@ namespace NullServers.UI
                 GUIUtility.hotControl = 0;
             }
 
-            commit?.Invoke("#" + ColorUtility.ToHtmlStringRGB(Color.HSVToRGB(_hue, _saturation, _value)));
+            commit?.Invoke(SelectedHex);
         }
 
         internal void HandleInput()
@@ -96,6 +96,9 @@ namespace NullServers.UI
             return GUI.Button(rect, GUIContent.none, GUIStyle.none);
         }
 
+        private string SelectedHex => "#" + ColorUtility.ToHtmlStringRGB(Color.HSVToRGB(_hue, _saturation, _value));
+
+        // The panel: a hue/saturation wheel, a preview, a brightness slider and a hex field.
         internal void Draw(GUISkin skin)
         {
             if (!IsOpen) return;
@@ -111,21 +114,33 @@ namespace NullServers.UI
             bool oldEnabled = GUI.enabled;
 
             GUI.enabled = true;
+            DrawBackground();
+
+            Rect wheel = new(_panel.x + 12f, _panel.y + 30f, _panel.width - 24f, _panel.width - 24f);
+            GUI.Label(new Rect(_panel.x + 12f, _panel.y + 4f, _panel.width - 24f, 24f), "Color", _label);
+            DrawWheel(wheel);
+            DrawControls(wheel.yMax + 8f);
+
+            GUI.color = oldColor;
+            GUI.enabled = oldEnabled;
+        }
+
+        private void DrawBackground()
+        {
             GUI.color = new Color(0.65f, 0.65f, 0.65f, 1f);
             GUI.DrawTexture(_panel, Texture2D.whiteTexture);
 
             GUI.color = new Color(0.025f, 0.025f, 0.035f, 1f);
-            GUI.DrawTexture(
-                new Rect(_panel.x + 1f, _panel.y + 1f, _panel.width - 2f, _panel.height - 2f),
-                Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(_panel.x + 1f, _panel.y + 1f, _panel.width - 2f, _panel.height - 2f), Texture2D.whiteTexture);
 
             GUI.color = Color.white;
             _label.fontSize = _input.fontSize = Mathf.Max(14, Screen.height / 40);
             _previewStyle.fontSize = _label.fontSize;
+        }
 
-            Rect wheel = new(_panel.x + 12f, _panel.y + 30f, _panel.width - 24f, _panel.width - 24f);
-            GUI.Label(new Rect(_panel.x + 12f, _panel.y + 4f, _panel.width - 24f, 24f), "Color", _label);
-
+        // Dragging inside the wheel picks hue (angle) and saturation (distance from the center).
+        private void DrawWheel(Rect wheel)
+        {
             GUI.color = new Color(_value, _value, _value, 1f);
             GUI.DrawTexture(wheel, MenuUi.ColorWheel);
 
@@ -140,9 +155,7 @@ namespace NullServers.UI
                 GUIUtility.hotControl = _wheelControl;
             }
 
-            if (GUIUtility.hotControl == _wheelControl &&
-                (current.type == EventType.MouseDown ||
-                current.type == EventType.MouseDrag))
+            if (GUIUtility.hotControl == _wheelControl && current.type is EventType.MouseDown or EventType.MouseDrag)
             {
                 _hue = Mathf.Repeat(Mathf.Atan2(-pointInWheel.y, pointInWheel.x) / (Mathf.PI * 2f), 1f);
                 _saturation = Mathf.Clamp01(pointInWheel.magnitude);
@@ -165,19 +178,16 @@ namespace NullServers.UI
 
             GUI.color = Color.white;
             GUI.DrawTexture(new Rect(cursor.x - 3f, cursor.y - 3f, 6f, 6f), Texture2D.whiteTexture);
+        }
 
-            float yRow = wheel.yMax + 8f;
-            string selectedHex = "#" + ColorUtility.ToHtmlStringRGB(Color.HSVToRGB(_hue, _saturation, _value));
-            GUI.Label(
-                new Rect(_panel.x + 12f, yRow, _panel.width - 24f, 30f),
-                $"<color={selectedHex}>{_sample ?? "Preview"}</color>",
-                _previewStyle);
+        private void DrawControls(float yRow)
+        {
+            GUI.Label(new Rect(_panel.x + 12f, yRow, _panel.width - 24f, 30f), $"<color={SelectedHex}>{_sample ?? "Preview"}</color>", _previewStyle);
 
             yRow += 34f;
             GUI.Label(new Rect(_panel.x + 12f, yRow, _panel.width - 24f, 22f), "Brightness", _label);
 
             float value = GUI.HorizontalSlider(new Rect(_panel.x + 12f, yRow + 24f, _panel.width - 24f, 18f), _value, 0f, 1f);
-
             if (value != _value)
             {
                 _value = value;
@@ -185,13 +195,10 @@ namespace NullServers.UI
             }
 
             yRow += 48f;
-            Swatch(
-                new Rect(_panel.x + 12f, yRow, 28f, 28f),
-                "#" + ColorUtility.ToHtmlStringRGB(Color.HSVToRGB(_hue, _saturation, _value)));
+            Swatch(new Rect(_panel.x + 12f, yRow, 28f, 28f), SelectedHex);
 
             GUI.SetNextControlName("PickerHex");
             string hex = GUI.TextField(new Rect(_panel.x + 48f, yRow, _panel.width - 124f, 28f), _hex, 7, _input);
-
             if (hex != _hex)
             {
                 _hex = hex;
@@ -206,14 +213,11 @@ namespace NullServers.UI
             {
                 Close();
             }
-
-            GUI.color = oldColor;
-            GUI.enabled = oldEnabled;
         }
 
         private void UpdateHex()
         {
-            _hex = "#" + ColorUtility.ToHtmlStringRGB(Color.HSVToRGB(_hue, _saturation, _value));
+            _hex = SelectedHex;
             _preview?.Invoke(_hex);
         }
     }

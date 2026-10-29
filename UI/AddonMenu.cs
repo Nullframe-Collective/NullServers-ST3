@@ -1,5 +1,3 @@
-using HarmonyLib;
-using Il2Cpp;
 using Il2CppInterop.Runtime;
 using NullServers.Additional;
 using NullServers.Content;
@@ -26,26 +24,17 @@ namespace NullServers.UI
         private string _error;
         private float _nextScan;
 
-        internal AddonMenu(HarmonyLib.Harmony harmony, RelaySession session)
+        internal AddonMenu(RelaySession session)
         {
             _instance = this;
             _session = session;
-
-            harmony.Patch(
-                AccessTools.Method(typeof(LobbyMenu), nameof(LobbyMenu.OnGUI)),
-                prefix: new HarmonyMethod(typeof(AddonMenu), nameof(BeforeLobbyGUI)));
-
-            harmony.Patch(
-                AccessTools.Method(typeof(MainMenu), nameof(MainMenu.OnGUI)),
-                prefix: new HarmonyMethod(typeof(AddonMenu), nameof(BeforeMainGUI)),
-                postfix: new HarmonyMethod(typeof(AddonMenu), nameof(AfterMainGUI)));
         }
 
-        private static bool BeforeLobbyGUI() => _instance._session.AddonNotice == null;
+        internal static bool BeforeLobbyGUI() => _instance._session.AddonNotice == null;
 
-        private static bool BeforeMainGUI() => !_instance._root;
+        internal static bool BeforeMainGUI() => !_instance._root;
 
-        private static void AfterMainGUI()
+        internal static void AfterMainGUI()
         {
             if (_instance._label && _instance._label.text != "ADDONS")
             {
@@ -89,10 +78,12 @@ namespace NullServers.UI
             }
         }
 
+        internal static Button MenuTemplate(bool inactive = false) => Object.FindObjectsOfType<Button>(inactive).FirstOrDefault(button =>
+            button.name == "CreditButton" && button.transform.parent.name == "PCButtons");
+
         private void Bind()
         {
-            Button source = Object.FindObjectsOfType<Button>().FirstOrDefault(button =>
-                button.name == "CreditButton" && button.transform.parent.name == "PCButtons");
+            Button source = MenuTemplate();
 
             if (!source)
             {
@@ -265,7 +256,7 @@ namespace NullServers.UI
 
             if (installed != null)
             {
-                bool available = Frameworks.Installed.Any(local => local.Id == addon.Id);
+                bool available = Dependencies.Optional.Contains(addon.Id) || Frameworks.Installed.Any(local => local.Id == addon.Id);
                 bool enabled = Frameworks.Settings.Enabled(addon.Id);
                 Button toggle = _ui.Button(row, available ? enabled ? "Enabled" : "Disabled" : "Unavailable", () =>
                 {
@@ -302,7 +293,7 @@ namespace NullServers.UI
             float top = 0f;
             AddonPack[] packs = notice.Packs ?? Array.Empty<AddonPack>();
             AddonRequirement[] list = notice.Missing.Length > 0 ? notice.Missing :
-                packs.Length == 0 ? notice.Required : Array.Empty<AddonRequirement>();
+                packs.Length == 0 && notice.Kind != AddonNoticeKind.Download ? notice.Required : Array.Empty<AddonRequirement>();
 
             foreach (AddonRequirement addon in list)
             {
@@ -322,7 +313,13 @@ namespace NullServers.UI
             _ui.Height(scroll.content, top);
             scroll.verticalNormalizedPosition = 1f;
 
-            bool fetch = ContentDownloads.CanFetch(notice) && _session.LastRoomId != null && _session.Downloads != null;
+            string blocker = notice.Kind == AddonNoticeKind.Content ? ContentDownloads.Blocker(notice) : null;
+            if (blocker == null && notice.Kind == AddonNoticeKind.Content && _session.LastRoomId == null)
+            {
+                blocker = "Join the room from the room list to download its packs.";
+            }
+
+            bool fetch = notice.Kind == AddonNoticeKind.Content && blocker == null && _session.Downloads != null;
             string help = fetch
                 ? "Download fetches these packs from the host and checks them before they load. Checks reduce the risk, but cannot guarantee that host content is safe."
                 : notice.Kind switch
@@ -330,11 +327,13 @@ namespace NullServers.UI
                 AddonNoticeKind.Disabled => "Open ADDONS in the main menu and enable the required addon.",
                 AddonNoticeKind.Unavailable => "The DLL is installed. Repair the required pack named above, then restart the game.",
                 AddonNoticeKind.Room => "Refresh the room list and try again. Both players should use the current NullServers build.",
-                AddonNoticeKind.Content => "Download the missing or different packs from our Discord, then restart. Unused local packs are disabled for this room.",
+                AddonNoticeKind.Download => "Nothing from this download was loaded. Join the room again to retry, or ask the host to check the pack.",
+                AddonNoticeKind.Content => blocker + " Or download the packs from our Discord, then restart.",
                 _ => "Download opens our Discord server. Install the addons and restart the game."
             };
             Text hint = _ui.Label(body, help, 23);
             GameUi.Area(hint.rectTransform, 0f, 0.14f, 1f, 0.28f);
+            GameUi.Fit(hint, Mathf.RoundToInt(14f * _ui.Unit), hint.fontSize);
             Button close = _ui.Button(body, "Close", Close);
             GameUi.Area(close.GetComponent<RectTransform>(), notice.Download ? 0f : 0.25f, 0f, notice.Download ? 0.49f : 0.75f, 0.10f);
 
@@ -350,12 +349,6 @@ namespace NullServers.UI
             string room = _session.LastRoomId;
             _session.Downloads.Consent(room, notice.Packs);
             Close();
-
-            NetBootstrap bootstrap = NetBootstrap.Current;
-            if (!bootstrap || !bootstrap.JoinRoom(room))
-            {
-                _session.ShowAddonError("Could not join the room to download its packs. Refresh the room list and try again.", AddonNoticeKind.Room);
-            }
         }
 
         private void RequiredRow(RectTransform parent, float top, string name, string detail, string status)

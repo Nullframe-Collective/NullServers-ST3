@@ -3,6 +3,7 @@ using NullServers.Additional;
 using NullServers.Network;
 using NullServers.Players;
 using NullServers.Server;
+using System.Text;
 using UnityEngine;
 
 namespace NullServers.Content
@@ -20,7 +21,7 @@ namespace NullServers.Content
         private sealed class Peer
         {
             internal IntPtr Connection;
-            internal readonly TrafficBudget Budget = new(2 * 1024 * 1024, 512 * 1024);
+            internal readonly TrafficBudget Budget = new(512 * 1024, 64 * 1024);
             internal readonly Queue<Range> Ranges = new();
         }
 
@@ -31,7 +32,7 @@ namespace NullServers.Content
         private readonly PlayerProfiles _profiles;
         private readonly Dictionary<int, Peer> _peers = new();
         private readonly Dictionary<string, (long Length, DateTime Written, string Sha256)> _hashes = new(StringComparer.OrdinalIgnoreCase);
-        private TrafficBudget _total = new(8 * 1024 * 1024, 1024 * 1024);
+        private TrafficBudget _total = new(1024 * 1024, 128 * 1024);
         private string _room;
 
         internal ContentServer(RelaySession session, ServerControl control, PlayerProfiles profiles)
@@ -49,7 +50,7 @@ namespace NullServers.Content
             {
                 _room = room;
                 _peers.Clear();
-                _total = new TrafficBudget(8 * 1024 * 1024, 1024 * 1024);
+                _total = new TrafficBudget(1024 * 1024, 128 * 1024);
             }
 
             if (room == null) return;
@@ -71,8 +72,25 @@ namespace NullServers.Content
         {
             while (peer.Ranges.TryPeek(out Range range))
             {
-                int size = (int)Math.Min(ContentMessage.ChunkSize, range.Length - range.Sent);
-                int cost = size / 3 * 4 + 256;
+                ContentMessage chunk = Message(ContentStage.Chunk, range.Pack, range.Hash) with
+                {
+                    File = range.File,
+                    Offset = range.Offset + range.Sent,
+                    Data = ""
+                };
+
+                int header = Encoding.UTF8.GetByteCount(chunk.Serialize());
+                int fits = Math.Min(ContentMessage.ChunkSize, (_profiles.PacketRoom - header) / 4 * 3);
+
+                if (fits <= 0)
+                {
+                    peer.Ranges.Clear();
+                    Send(connection, Failed(range.Pack, range.Hash, "The host's network packets are too small for downloads."));
+                    return;
+                }
+
+                int size = (int)Math.Min(fits, range.Length - range.Sent);
+                int cost = header + (size + 2) / 3 * 4;
                 if (!peer.Budget.CanSpend(cost, now) || !_total.CanSpend(cost, now)) return;
 
                 FileInfo info = new(range.Path);
@@ -107,12 +125,7 @@ namespace NullServers.Content
 
                 peer.Budget.Spend(cost, now);
                 _total.Spend(cost, now);
-                Send(connection, Message(ContentStage.Chunk, range.Pack, range.Hash) with
-                {
-                    File = range.File,
-                    Offset = range.Offset + range.Sent,
-                    Data = Convert.ToBase64String(data)
-                });
+                Send(connection, chunk with { Data = Convert.ToBase64String(data) });
 
                 range.Sent += size;
                 if (range.Sent >= range.Length)

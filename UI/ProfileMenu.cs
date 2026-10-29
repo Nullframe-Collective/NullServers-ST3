@@ -1,4 +1,3 @@
-using HarmonyLib;
 using Il2Cpp;
 using NullServers.Network;
 using NullServers.Players;
@@ -20,7 +19,7 @@ namespace NullServers.UI
         private GUIStyle _label;
         private GUIStyle _input;
 
-        internal ProfileMenu(HarmonyLib.Harmony harmony, RelaySession session, PlayerProfiles profiles, ColorPicker picker)
+        internal ProfileMenu(RelaySession session, PlayerProfiles profiles, ColorPicker picker)
         {
             _instance = this;
             _session = session;
@@ -33,33 +32,15 @@ namespace NullServers.UI
                 _nickname = profile.Nickname;
                 _editing = false;
             };
-
-            harmony.Patch(
-                AccessTools.Method(typeof(LobbyMenu), nameof(LobbyMenu.BAGGECEDBML)),
-                prefix: new HarmonyMethod(typeof(ProfileMenu), nameof(BeforeBrowser)),
-                postfix: new HarmonyMethod(typeof(ProfileMenu), nameof(AfterBrowser)),
-                finalizer: new HarmonyMethod(typeof(ProfileMenu), nameof(EndBrowser)));
-            harmony.Patch(
-                AccessTools.Method(typeof(GUI), nameof(GUI.Box), [typeof(Rect), typeof(string)]),
-                prefix: new HarmonyMethod(typeof(ProfileMenu), nameof(BeforeBrowserBox)));
-            harmony.Patch(
-                AccessTools.Method(typeof(LobbyMenu), nameof(LobbyMenu.OnGUI)),
-                prefix: new HarmonyMethod(typeof(ProfileMenu), nameof(BeforeLobbyGUI)),
-                postfix: new HarmonyMethod(typeof(ProfileMenu), nameof(AfterLobbyGUI)),
-                finalizer: new HarmonyMethod(typeof(ProfileMenu), nameof(EndLobbyGUI)));
-
-            harmony.Patch(
-                AccessTools.Method(typeof(GUI), nameof(GUI.TextField), [ typeof(Rect), typeof(string), typeof(int) ]),
-                prefix: new HarmonyMethod(typeof(ProfileMenu), nameof(BeforeRoomField)));
         }
 
-        private static void BeforeBrowser(LobbyMenu __instance)
+        internal static void BeforeBrowser(LobbyMenu __instance)
         {
             _instance._drawingBrowser = _instance._session.IsNullFrame && !__instance.BAJDIMCNBDM;
             _instance._roomField = default;
         }
 
-        private static void BeforeRoomField(Rect __0)
+        internal static void BeforeRoomField(Rect __0)
         {
             if (_instance._drawingBrowser && __0.y > Screen.height * 0.6f)
             {
@@ -67,7 +48,7 @@ namespace NullServers.UI
             }
         }
 
-        private static void BeforeBrowserBox(ref Rect __0)
+        internal static void BeforeBrowserBox(ref Rect __0)
         {
             if (_instance._drawingBrowser && __0.height > Screen.height * 0.5f)
             {
@@ -75,7 +56,7 @@ namespace NullServers.UI
             }
         }
 
-        private static void AfterBrowser(LobbyMenu __instance)
+        internal static void AfterBrowser(LobbyMenu __instance)
         {
             ProfileMenu instance = _instance;
             instance._drawingBrowser = false;
@@ -155,9 +136,9 @@ namespace NullServers.UI
             _nickname = _profiles.Local.Nickname;
         }
 
-        private static void EndBrowser() => _instance._drawingBrowser = false;
+        internal static void EndBrowser() => _instance._drawingBrowser = false;
 
-        private static void BeforeLobbyGUI(out bool __state)
+        internal static void BeforeLobbyGUI(out bool __state)
         {
             __state = GUI.enabled;
 
@@ -186,7 +167,7 @@ namespace NullServers.UI
             _instance._picker.BlockInput();
         }
 
-        private static void AfterLobbyGUI(LobbyMenu __instance, bool __state)
+        internal static void AfterLobbyGUI(LobbyMenu __instance, bool __state)
         {
             GUI.enabled = __state;
 
@@ -200,6 +181,6 @@ namespace NullServers.UI
             }
         }
 
-        private static void EndLobbyGUI(bool __state) => GUI.enabled = __state;
+        internal static void EndLobbyGUI(bool __state) => GUI.enabled = __state;
     }
 }

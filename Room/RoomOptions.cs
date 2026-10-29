@@ -21,7 +21,7 @@ namespace NullServers.Room
 
             try
             {
-                using var document = JsonDocument.Parse(roomData);
+                using JsonDocument document = JsonDocument.Parse(roomData);
                 if (document.RootElement.ValueKind != JsonValueKind.Object ||
                     !document.RootElement.TryGetProperty(nameof(NameColor), out var property) ||
                     property.ValueKind != JsonValueKind.String)

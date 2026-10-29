@@ -1,6 +1,5 @@
 ﻿using Il2Cpp;
 using Il2CppInterop.Runtime;
-using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using NullServers.Customization;
 using System.Globalization;
 using System.Security.Cryptography;
@@ -21,20 +20,24 @@ namespace NullServers.Sandbox
         private readonly HashSet<string> _queuedIcons = new();
         private readonly Dictionary<string, float> _retryIcons = new();
         private readonly HashSet<IntPtr> _capturedVolumes = new();
+        private readonly HashSet<string> _checked = new(StringComparer.Ordinal);
+        private readonly HashSet<string> _blank = new(StringComparer.Ordinal);
         private float _nextCapture;
         private int _scene = -1;
         private readonly BuildingProps _props = new();
 
         internal SkinTextures Textures { get; } = new();
 
-        internal IReadOnlyCollection<Entry> Entries
+        internal IEnumerable<Entry> Entries
         {
             get
             {
                 ScanIfStale();
-                return _entries.Values;
+                return _entries.Values.Where(entry => !_blank.Contains(entry.Id));
             }
         }
+
+        internal int Revision { get; private set; }
 
         internal SandboxAssets()
         {
@@ -57,7 +60,15 @@ namespace NullServers.Sandbox
             }
         }
 
-        private void Add(Entry entry) => _entries.TryAdd(entry.Id, entry);
+        private void Add(Entry entry)
+        {
+            if (_entries.TryAdd(entry.Id, entry) && Checked(entry))
+            {
+                QueueIcon(entry);
+            }
+        }
+
+        private static bool Checked(Entry entry) => !entry.Primitive.HasValue && !entry.Id.StartsWith("kit:", StringComparison.Ordinal);
 
         internal void Capture(IEnumerable<Volume> volumes)
         {
@@ -109,6 +120,7 @@ namespace NullServers.Sandbox
             }
         }
 
+        // Every 15 seconds the catalog picks up new loaded prefabs and small props of the current map.
         private void ScanIfStale()
         {
             if (Time.unscaledTime < _nextCapture) return;
@@ -127,64 +139,58 @@ namespace NullServers.Sandbox
 
             foreach (MeshFilter filter in Object.FindObjectsOfType<MeshFilter>())
             {
-                if (!filter.sharedMesh ||
-                    filter.gameObject.scene != room.gameObject.scene ||
-                    filter.sharedMesh.vertexCount > 100000 ||
-                    _entries.Count >= 512 ||
-                    filter.GetComponentsInChildren<MeshFilter>().Length != 1)
-                {
-                    continue;
-                }
+                if (_entries.Count >= 512) continue;
+                if (!ScenePropAllowed(filter, room.gameObject.scene)) continue;
 
-                bool excluded = false;
-                for (Transform node = filter.transform; node; node = node.parent)
-                {
-                    if (node.GetComponent(Il2CppType.Of<PlayerNetworkController>()) ||
-                        node.GetComponent(Il2CppType.Of<PlayerMonster>()) ||
-                        node.GetComponent(Il2CppType.Of<Bot>()) ||
-                        node.GetComponent(Il2CppType.Of<Volume>()) ||
-                        node.GetComponent(Il2CppType.Of<RagdollController>()) ||
-                        node.GetComponent(Il2CppType.Of<FPScontroller>()))
-                    {
-                        excluded = true;
-                        break;
-                    }
-                }
-
-                Vector3 size = Vector3.Scale(filter.sharedMesh.bounds.size, filter.transform.lossyScale);
-                if (excluded || Mathf.Max(Mathf.Abs(size.x), Mathf.Abs(size.y), Mathf.Abs(size.z)) > 30f)
-                {
-                    continue;
-                }
-
-                Bounds bounds = filter.sharedMesh.bounds;
                 Renderer renderer = filter.GetComponent(Il2CppType.Of<Renderer>())?.Cast<Renderer>();
+                if (!renderer || !renderer.enabled || renderer.isPartOfStaticBatch) continue;
 
-                string signature = filter.sharedMesh.name + "|" +
-                    filter.sharedMesh.vertexCount + "|" +
-                    string.Join(
-                        "|",
-                        new[]
-                        {
-                            bounds.center.x,
-                            bounds.center.y,
-                            bounds.center.z,
-                            bounds.size.x,
-                            bounds.size.y,
-                            bounds.size.z
-                        }
-                        .Select(value => value.ToString("R", CultureInfo.InvariantCulture))) +
-                        "|" +
-                        (renderer ?
-                        string.Join("|", renderer.sharedMaterials.Select(material => material ? material.name : "")) : "");
-
-                string id = string.Concat("scene:", room.gameObject.scene.name, ":", Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(signature))).AsSpan(0, 24));
-
+                string id = SceneId(room.gameObject.scene, filter, renderer);
                 if (id.Length <= 192)
                 {
                     Add(new Entry(id, filter.name, null, filter.gameObject));
                 }
             }
+        }
+
+        // A map prop is a single mesh up to 30 metres that does not belong to a player, NPC, ragdoll or volume.
+        private static bool ScenePropAllowed(MeshFilter filter, UnityEngine.SceneManagement.Scene scene)
+        {
+            if (!filter.sharedMesh || filter.gameObject.scene != scene || filter.sharedMesh.vertexCount > 100000) return false;
+            if (filter.GetComponentsInChildren<MeshFilter>().Length != 1) return false;
+
+            for (Transform node = filter.transform; node; node = node.parent)
+            {
+                if (node.GetComponent(Il2CppType.Of<PlayerNetworkController>()) ||
+                    node.GetComponent(Il2CppType.Of<PlayerMonster>()) ||
+                    node.GetComponent(Il2CppType.Of<Bot>()) ||
+                    node.GetComponent(Il2CppType.Of<Volume>()) ||
+                    node.GetComponent(Il2CppType.Of<RagdollController>()) ||
+                    node.GetComponent(Il2CppType.Of<FPScontroller>()))
+                {
+                    return false;
+                }
+            }
+
+            Vector3 size = Vector3.Scale(filter.sharedMesh.bounds.size, filter.transform.lossyScale);
+            return Mathf.Max(Mathf.Abs(size.x), Mathf.Abs(size.y), Mathf.Abs(size.z)) <= 30f;
+        }
+
+        // Map props have no stable name, so their id is a hash of the mesh, its bounds and its materials.
+        // Host and clients load the same map, so they get the same id for the same prop.
+        private static string SceneId(UnityEngine.SceneManagement.Scene scene, MeshFilter filter, Renderer renderer)
+        {
+            Mesh mesh = filter.sharedMesh;
+            Bounds bounds = mesh.bounds;
+            float[] numbers = { bounds.center.x, bounds.center.y, bounds.center.z, bounds.size.x, bounds.size.y, bounds.size.z };
+
+            string signature = mesh.name + "|" +
+                mesh.vertexCount + "|" +
+                string.Join("|", numbers.Select(value => value.ToString("R", CultureInfo.InvariantCulture))) + "|" +
+                string.Join("|", renderer.sharedMaterials.Select(material => material ? material.name : ""));
+
+            string hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(signature)));
+            return string.Concat("scene:", scene.name, ":", hash.AsSpan(0, 24));
         }
 
         private static bool SafeProp(GameObject source)
@@ -293,6 +299,11 @@ namespace NullServers.Sandbox
         {
             if (entry.Icon)
             {
+                if (!_checked.Contains(entry.Id))
+                {
+                    QueueIcon(entry);
+                }
+
                 return entry.Icon.texture;
             }
 
@@ -329,6 +340,9 @@ namespace NullServers.Sandbox
             }
         }
 
+        private static readonly Color IconBackground = new(0.78f, 0.81f, 0.85f, 1f);
+
+        // Icons are rendered far below the map on layer 30, so nothing else ends up in the picture.
         private void RenderIcon(Entry entry)
         {
             GameObject root = Create(entry.Id, false);
@@ -341,46 +355,9 @@ namespace NullServers.Sandbox
 
             try
             {
-                root.transform.position = new Vector3(0f, -18000, 0f);
-                foreach (Transform node in root.GetComponentsInChildren<Transform>(true))
-                {
-                    node.gameObject.layer = 30;
-                }
-
-                Bounds bounds = BoundsOf(root);
-                float radius = Mathf.Max(0.1f, bounds.extents.magnitude);
-                Camera camera = cameraObject.AddComponent(Il2CppType.Of<Camera>()).Cast<Camera>();
-                camera.enabled = false;
-                camera.cullingMask = 1 << 30;
-                camera.clearFlags = CameraClearFlags.SolidColor;
-                camera.backgroundColor = new Color(0.78f, 0.81f, 0.85f, 1f);
-                camera.nearClipPlane = 0.01f;
-                camera.farClipPlane = radius * 10f + 10f;
-                camera.orthographic = true;
-                camera.orthographicSize = radius * 1.1f;
-                camera.transform.position = bounds.center + new Vector3(1f, 0.7f, -1).normalized * radius * 3f;
-                camera.transform.LookAt(bounds.center);
-                Light light = lightObject.AddComponent(Il2CppType.Of<Light>()).Cast<Light>();
-                light.type = LightType.Directional;
-                light.intensity = 1.3f;
-                light.cullingMask = 1 << 30;
-                light.transform.rotation = Quaternion.Euler(35f, -35, 0f);
-                texture.Create();
-                camera.targetTexture = texture;
-                camera.Render();
-                RenderTexture.active = texture;
-                Texture2D icon = new(128, 128, TextureFormat.RGBA32, false);
-                icon.hideFlags = HideFlags.HideAndDontSave;
-                icon.ReadPixels(new Rect(0f, 0f, 128f, 128f), 0, 0);
-                icon.Apply();
-
-                if (_icons.Remove(entry.Id, out var old) && old)
-                {
-                    Object.Destroy(old);
-                }
-
-                _icons[entry.Id] = icon;
-                camera.targetTexture = null;
+                Texture2D icon = Photograph(root, cameraObject, lightObject, texture);
+                _checked.Add(entry.Id);
+                KeepIcon(entry, icon);
             }
             finally
             {
@@ -391,6 +368,89 @@ namespace NullServers.Sandbox
                 Object.Destroy(cameraObject);
                 Object.Destroy(lightObject);
             }
+        }
+
+        private static Texture2D Photograph(GameObject root, GameObject cameraObject, GameObject lightObject, RenderTexture texture)
+        {
+            root.transform.position = new Vector3(0f, -18000, 0f);
+            foreach (Transform node in root.GetComponentsInChildren<Transform>(true))
+            {
+                node.gameObject.layer = 30;
+            }
+
+            Bounds bounds = BoundsOf(root);
+            float radius = Mathf.Max(0.1f, bounds.extents.magnitude);
+
+            Camera camera = cameraObject.AddComponent(Il2CppType.Of<Camera>()).Cast<Camera>();
+            camera.enabled = false;
+            camera.cullingMask = 1 << 30;
+            camera.clearFlags = CameraClearFlags.SolidColor;
+            camera.backgroundColor = IconBackground;
+            camera.nearClipPlane = 0.01f;
+            camera.farClipPlane = radius * 10f + 10f;
+            camera.orthographic = true;
+            camera.orthographicSize = radius * 1.1f;
+            camera.transform.position = bounds.center + new Vector3(1f, 0.7f, -1).normalized * radius * 3f;
+            camera.transform.LookAt(bounds.center);
+
+            Light light = lightObject.AddComponent(Il2CppType.Of<Light>()).Cast<Light>();
+            light.type = LightType.Directional;
+            light.intensity = 1.3f;
+            light.cullingMask = 1 << 30;
+            light.transform.rotation = Quaternion.Euler(35f, -35, 0f);
+
+            texture.Create();
+            camera.targetTexture = texture;
+            camera.Render();
+            RenderTexture.active = texture;
+
+            Texture2D icon = new(128, 128, TextureFormat.RGBA32, false);
+            icon.hideFlags = HideFlags.HideAndDontSave;
+            icon.ReadPixels(new Rect(0f, 0f, 128f, 128f), 0, 0);
+            icon.Apply();
+            camera.targetTexture = null;
+            return icon;
+        }
+
+        // A blank picture means the object has nothing visible, so it is hidden from the catalog.
+        private void KeepIcon(Entry entry, Texture2D icon)
+        {
+            if (Blank(icon, IconBackground) && Checked(entry))
+            {
+                _blank.Add(entry.Id);
+                Revision++;
+                Object.Destroy(icon);
+                return;
+            }
+
+            if (entry.Icon)
+            {
+                Object.Destroy(icon);
+                return;
+            }
+
+            if (_icons.Remove(entry.Id, out var old) && old)
+            {
+                Object.Destroy(old);
+            }
+
+            _icons[entry.Id] = icon;
+        }
+
+        private static bool Blank(Texture2D icon, Color background)
+        {
+            Color32 empty = background;
+            int drawn = 0;
+
+            foreach (Color32 pixel in icon.GetPixels32())
+            {
+                if (Math.Abs(pixel.r - empty.r) + Math.Abs(pixel.g - empty.g) + Math.Abs(pixel.b - empty.b) > 12 && ++drawn >= 24)
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         internal static Transform CreateSegment(Transform parent, Material material)
@@ -436,6 +496,11 @@ namespace NullServers.Sandbox
                 root = Object.Instantiate(source, holder.transform, false).Cast<GameObject>();
                 root.SetActive(false);
                 root.name = name;
+
+                foreach (SkinnedMeshRenderer skinned in root.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+                {
+                    skinned.updateWhenOffscreen = true;
+                }
 
                 foreach (Component component in root.GetComponentsInChildren<Component>(true))
                 {

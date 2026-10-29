@@ -1,5 +1,4 @@
-﻿using HarmonyLib;
-using Il2Cpp;
+﻿using Il2Cpp;
 using Il2CppFishNet.Connection;
 using Il2CppFishNet.Managing;
 using Il2CppFishNet.Managing.Logging;
@@ -73,17 +72,13 @@ namespace NullServers.Server
         internal bool Busy => _pendingRevision != null;
         internal string Status { get; private set; }
 
-        internal ServerControl(
-            HarmonyLib.Harmony harmony,
-            RelaySession session,
-            PlayerProfiles profiles,
-            MelonLogger.Instance logger)
+        internal ServerControl(RelaySession session, PlayerProfiles profiles, MelonLogger.Instance logger)
         {
             _instance = this;
             _session = session;
             _profiles = profiles;
             _logger = logger;
-            _roundSync = new RoundSync(harmony, session, profiles, logger);
+            _roundSync = new RoundSync(session, profiles, logger);
 
             profiles.RoundSignalReceived += OnRoundSignal;
 
@@ -93,32 +88,17 @@ namespace NullServers.Server
                 logger.Warning(Bans.LoadError);
             }
 
-            Access = new ServerAccess(harmony, this, session, profiles);
-            Tools = new HostTools(harmony, this);
-            Protection = new AntiCrash(harmony, this, logger);
+            Access = new ServerAccess(this, session, profiles);
+            Tools = new HostTools(this);
+            Protection = new AntiCrash(this, logger);
 
             if (Access.Mutes.LoadError != null)
             {
                 logger.Warning(Access.Mutes.LoadError);
             }
-
-            harmony.Patch(
-                AccessTools.Method(typeof(LobbyMenu), nameof(LobbyMenu.Start)),
-                postfix: new HarmonyMethod(typeof(ServerControl), nameof(CaptureCatalog)));
-            harmony.Patch(
-                AccessTools.Method(typeof(RelayTransport), nameof(RelayTransport.Relay_OnRoomUpdated)),
-                postfix: new HarmonyMethod(typeof(ServerControl), nameof(AfterRoomUpdated)));
-            harmony.Patch(
-                AccessTools.PropertySetter(typeof(UnityEngine.UI.Text), nameof(UnityEngine.UI.Text.text)),
-                prefix: new HarmonyMethod(typeof(ServerControl), nameof(BeforeCaptionText)));
-
-            harmony.Patch(
-                AccessTools.Method(typeof(GUI), nameof(GUI.Label), [ typeof(Rect), typeof(string), typeof(GUIStyle) ]),
-                prefix: new HarmonyMethod(typeof(ServerControl), nameof(BeforeRoomCaption)),
-                finalizer: new HarmonyMethod(typeof(ServerControl), nameof(AfterRoomCaption)));
         }
 
-        private static void CaptureCatalog(LobbyMenu __instance)
+        internal static void CaptureCatalog(LobbyMenu __instance)
         {
             ServerControl instance = _instance;
             instance._maps.Clear();
@@ -145,7 +125,7 @@ namespace NullServers.Server
 
             instance._maps.AddRange(MapRooms.Scenes.Where(scene => !instance._maps.Contains(scene)));
             instance._maps.Sort(StringComparer.Ordinal);
-            instance._logger.Msg($"Server settings catalog: {instance._maps.Count} maps, {instance._modes.Count} modes.");
+            instance._logger.Debug($"Server settings catalog: {instance._maps.Count} maps, {instance._modes.Count} modes.");
         }
 
         internal string PlayerName(int id, RelayPlayerIdentity identity)
@@ -212,6 +192,10 @@ namespace NullServers.Server
 
             return true;
         }
+
+        internal static void AfterMapViewRestored() => _instance.Rendering.Reapply();
+
+        internal static void AfterNightVisionEnabled(ToggleNightVision __instance) => _instance.Rendering.NightVision(__instance);
 
         private static WhoKilledWho KillFeed()
         {
@@ -412,7 +396,7 @@ namespace NullServers.Server
             return false;
         }
 
-        private static void AfterRoomUpdated(RelayRoomInfo info)
+        internal static void AfterRoomUpdated(RelayRoomInfo info)
         {
             ServerControl instance = _instance;
             if (info.Id != instance._pendingRoom || instance._pendingRevision == null)
@@ -441,43 +425,12 @@ namespace NullServers.Server
             if (!CanManage)
             {
                 _protectionNotices.Clear();
-                if (_loading)
-                {
-                    _roundSync.CancelSpawns();
-                }
-
-                ClearPending();
+                CancelPending();
                 _lastKick.Clear();
-
                 return;
             }
 
-            foreach (NetworkConnection connection in Connections())
-            {
-                bool collectiveBan = connection.IsAuthenticated && TryIdentity(connection.ClientId, out var authenticated) &&
-                    _session.Blacklist.Contains(authenticated.Username);
-                if (connection.ClientId != _session.Relay.LocalPlayerId &&
-                    TryIdentity(connection.ClientId, out var identity) &&
-                    (collectiveBan || !identity.IsGuest && Bans.Contains(identity.Username)) &&
-                    (!_lastKick.TryGetValue(connection.ClientId, out var last) || Time.unscaledTime - last >= 2f))
-                {
-                    if (collectiveBan)
-                    {
-                        _profiles.SendServerMessage(new ServerMessage(1, Room.Id, Notice: GlobalBlacklist.BannedMessage), connection);
-                        _logger.Warning("Community blacklist rejected authenticated account " + identity.Username + ".");
-                    }
-
-                    Disconnect(connection, collectiveBan ? GlobalBlacklist.BannedMessage : "This account is banned by the host.");
-                }
-            }
-
-            foreach (int id in _lastKick.Keys.ToArray())
-            {
-                if (!Manager.ServerManager.Clients.ContainsKey(id))
-                {
-                    _lastKick.Remove(id);
-                }
-            }
+            KickBannedPlayers();
 
             if (!Busy)
             {
@@ -487,13 +440,7 @@ namespace NullServers.Server
 
             if (Room.Id != _pendingRoom)
             {
-                if (_loading)
-                {
-                    _roundSync.CancelSpawns();
-                }
-
-                ClearPending();
-
+                CancelPending();
                 return;
             }
 
@@ -502,14 +449,7 @@ namespace NullServers.Server
                 Status = _loading ? "Loading timed out. Check players, then reopen the room or retry the round." :
                     "The relay did not confirm the update. Check the current room settings before retrying.";
                 _logger.Warning(Status);
-
-                if (_loading)
-                {
-                    _roundSync.CancelSpawns();
-                }
-
-                ClearPending();
-
+                CancelPending();
                 return;
             }
 
@@ -524,160 +464,207 @@ namespace NullServers.Server
             {
                 LoadRound();
             }
-            else if (!Manager.SceneManager.IteratingQueue &&
-                SceneManager.GetActiveScene().name == _pendingScene &&
-                SceneManager.GetActiveScene().handle != _previousSceneHandle &&
-                RoomMultiplayerMenu.Current &&
-                RoomMultiplayerMenu.Current != _previousMenu &&
-                RoomMultiplayerMenu.Current.IsServerInitialized &&
-                RoomMultiplayerMenu.Current.IsInitialized &&
-                Connections().All(connection =>
-                !connection.IsAuthenticated ||
-                (connection.Scenes.Contains(SceneManager.GetSceneByName(_pendingScene)) &&
-                (connection.ClientId == _session.Relay.LocalPlayerId ||
-                _readyClients.Contains(connection.ClientId)))))
+            else if (RoundReady())
             {
-                _logger.Msg($"Round ready: {_pendingScene}; {RoomProperties.Current.GameMode}; {Connections().Length} players.");
-                _profiles.Synchronize();
-
-                NetworkObject networkObject = RoomMultiplayerMenu.Current.NetworkObject;
-                RoundSignal signal = new(
-                    1,
-                    _pendingRoom,
-                    _pendingRevision,
-                    _pendingScene,
-                    true,
-                    networkObject.ObjectId,
-                    sceneId: networkObject.SceneId);
-
-                foreach (NetworkConnection connection in Connections())
-                {
-                    if (connection.IsAuthenticated && connection.ClientId != _session.Relay.LocalPlayerId)
-                    {
-                        _profiles.SendRoundSignal(signal, connection);
-                    }
-                }
-
-                _roundSync.ReleaseSpawns();
-                _session.HoldRoomClosed = false;
-                ClearPending();
-                Reopen(out var error);
-
-                if (error != null)
-                {
-                    Status = error;
-                }
+                StartRound();
             }
-            else if (_loading && !Manager.SceneManager.IteratingQueue && SceneManager.GetActiveScene().name == _pendingScene)
+            else if (!Manager.SceneManager.IteratingQueue && SceneManager.GetActiveScene().name == _pendingScene)
             {
-                string waiting = string.Join(
-                    ", ",
-                    Connections()
-                    .Where(connection => connection.IsAuthenticated &&
-                    connection.ClientId != _session.Relay.LocalPlayerId &&
-                    !_readyClients.Contains(connection.ClientId))
-                    .Select(connection => TryIdentity(connection.ClientId, out var identity) ?
-                    PlayerName(connection.ClientId, identity) : $"Player {connection.ClientId}"));
+                string waiting = WaitingPlayers();
                 Status = waiting.Length == 0 ? "Initializing the room..." : "Waiting for player initialization: " + waiting;
             }
         }
 
-        private void OnRoundSignal(NetworkConnection connection, RoundSignal signal)
+        private void CancelPending()
         {
-            if (!CanManage ||
-                !_loading ||
-                signal.RoomId != _pendingRoom ||
-                signal.Revision != _pendingRevision ||
-                signal.Scene != _pendingScene ||
-                !connection.IsValid ||
-                !connection.IsAuthenticated ||
-                connection.ClientId == _session.Relay.LocalPlayerId ||
-                !connection.Scenes.Contains(SceneManager.GetSceneByName(_pendingScene)))
+            if (_loading)
             {
-                return;
+                _roundSync.CancelSpawns();
             }
+
+            ClearPending();
+        }
+
+        // Banned accounts and accounts on the community blacklist are removed, at most once every 2 seconds per player.
+        private void KickBannedPlayers()
+        {
+            foreach (NetworkConnection connection in Connections())
+            {
+                if (connection.ClientId == _session.Relay.LocalPlayerId) continue;
+                if (!TryIdentity(connection.ClientId, out var identity)) continue;
+
+                bool blacklisted = connection.IsAuthenticated && _session.Blacklist.Contains(identity.Username);
+                bool banned = !identity.IsGuest && Bans.Contains(identity.Username);
+                if (!blacklisted && !banned) continue;
+                if (_lastKick.TryGetValue(connection.ClientId, out float last) && Time.unscaledTime - last < 2f) continue;
+
+                if (blacklisted)
+                {
+                    _profiles.SendServerMessage(new ServerMessage(1, Room.Id, Notice: GlobalBlacklist.BannedMessage), connection);
+                    _logger.Warning("Community blacklist rejected authenticated account " + identity.Username + ".");
+                }
+
+                Disconnect(connection, blacklisted ? GlobalBlacklist.BannedMessage : "This account is banned by the host.");
+            }
+
+            foreach (int id in _lastKick.Keys.ToArray())
+            {
+                if (!Manager.ServerManager.Clients.ContainsKey(id))
+                {
+                    _lastKick.Remove(id);
+                }
+            }
+        }
+
+        // The new round starts once its scene is loaded on the host and every player reported that they are ready.
+        private bool RoundReady()
+        {
+            if (Manager.SceneManager.IteratingQueue) return false;
+
+            UnityEngine.SceneManagement.Scene active = SceneManager.GetActiveScene();
+            if (active.name != _pendingScene || active.handle == _previousSceneHandle) return false;
 
             RoomMultiplayerMenu menu = RoomMultiplayerMenu.Current;
-            if (!menu ||
-                menu == _previousMenu ||
-                !menu.IsServerInitialized ||
-                menu.gameObject.scene.name != _pendingScene ||
-                Manager.SceneManager.IteratingQueue)
+            if (!menu || menu == _previousMenu || !menu.IsServerInitialized || !menu.IsInitialized) return false;
+
+            UnityEngine.SceneManagement.Scene pending = SceneManager.GetSceneByName(_pendingScene);
+            foreach (NetworkConnection connection in Connections())
             {
-                return;
+                if (!connection.IsAuthenticated) continue;
+                if (!connection.Scenes.Contains(pending)) return false;
+                if (connection.ClientId != _session.Relay.LocalPlayerId && !_readyClients.Contains(connection.ClientId)) return false;
             }
 
-            if (signal.Ready && signal.ObjectId == menu.NetworkObject.ObjectId)
+            return true;
+        }
+
+        private void StartRound()
+        {
+            _logger.Debug($"Round ready: {_pendingScene}; {RoomProperties.Current.GameMode}; {Connections().Length} players.");
+            _profiles.Synchronize();
+
+            NetworkObject networkObject = RoomMultiplayerMenu.Current.NetworkObject;
+            RoundSignal signal = new(1, _pendingRoom, _pendingRevision, _pendingScene, true, networkObject.ObjectId, sceneId: networkObject.SceneId);
+
+            foreach (NetworkConnection connection in Connections())
+            {
+                if (connection.IsAuthenticated && connection.ClientId != _session.Relay.LocalPlayerId)
+                {
+                    _profiles.SendRoundSignal(signal, connection);
+                }
+            }
+
+            _roundSync.ReleaseSpawns();
+            _session.HoldRoomClosed = false;
+            ClearPending();
+            Reopen(out string error);
+
+            if (error != null)
+            {
+                Status = error;
+            }
+        }
+
+        private string WaitingPlayers()
+        {
+            List<string> names = new();
+            foreach (NetworkConnection connection in Connections())
+            {
+                if (!connection.IsAuthenticated || connection.ClientId == _session.Relay.LocalPlayerId) continue;
+                if (_readyClients.Contains(connection.ClientId)) continue;
+
+                names.Add(TryIdentity(connection.ClientId, out var identity) ? PlayerName(connection.ClientId, identity) : $"Player {connection.ClientId}");
+            }
+
+            return string.Join(", ", names);
+        }
+
+        // While a new round loads, clients report their room object: ready, missing, or not spawned yet.
+        private void OnRoundSignal(NetworkConnection connection, RoundSignal signal)
+        {
+            if (!IsCurrentRoundSignal(connection, signal)) return;
+
+            RoomMultiplayerMenu menu = RoomMultiplayerMenu.Current;
+            if (!menu || menu == _previousMenu || !menu.IsServerInitialized) return;
+            if (menu.gameObject.scene.name != _pendingScene || Manager.SceneManager.IteratingQueue) return;
+
+            NetworkObject networkObject = menu.NetworkObject;
+            if (signal.Ready && signal.ObjectId == networkObject.ObjectId)
             {
                 _pendingSceneProbes.Remove(connection.ClientId);
                 if (_readyClients.Add(connection.ClientId))
                 {
-                    _logger.Msg($"Client {connection.ClientId} confirmed round initialization: {_pendingScene}; room object {signal.ObjectId}.");
+                    _logger.Debug($"Client {connection.ClientId} confirmed round initialization: {_pendingScene}; room object {signal.ObjectId}.");
                 }
 
                 return;
             }
 
-            NetworkObject networkObject = menu.NetworkObject;
             if (signal.Missing)
             {
-                if (signal.ObjectId != networkObject.ObjectId ||
-                    signal.SceneId != networkObject.SceneId ||
-                    !_pendingSceneProbes.Remove(connection.ClientId))
-                {
-                    return;
-                }
-
-                bool wasObserver = networkObject.RemoveObserver(connection);
-                Manager.ServerManager.Objects.RebuildObservers(networkObject, connection, false);
-                bool observing = networkObject.Observers.Contains(connection);
-                string details = $"client {connection.ClientId}; object {networkObject.ObjectId}; sceneId {networkObject.SceneId}; " +
-                    $"observerBefore={wasObserver}; observerAfter={observing}.";
-
-                if (observing)
-                {
-                    _logger.Msg("Room spawn queued again: " + details);
-                }
-                else
-                {
-                    _logger.Warning("Room spawn still blocked by observer state: " + details);
-                }
-
+                RespawnRoomObject(connection, signal, networkObject);
                 return;
             }
 
-            if (_lastSceneSync.TryGetValue(connection.ClientId, out var last) && Time.unscaledTime - last < 2f)
-            {
-                return;
-            }
+            if (_lastSceneSync.TryGetValue(connection.ClientId, out float last) && Time.unscaledTime - last < 2f) return;
 
             _lastSceneSync[connection.ClientId] = Time.unscaledTime;
             Manager.ServerManager.Objects.RebuildObservers(connection, false);
 
             if (signal.ObjectId < 0)
             {
-                if (!_pendingSceneProbes.Contains(connection.ClientId))
-                {
-                    _logger.Msg($"Room spawn probe for client {connection.ClientId}: object {networkObject.ObjectId}; " +
-                        $"sceneId {networkObject.SceneId}; observer={networkObject.Observers.Contains(connection)}.");
-                }
-
-                _pendingSceneProbes.Add(connection.ClientId);
-                _profiles.SendRoundSignal(
-                    new RoundSignal(
-                        1,
-                        _pendingRoom,
-                        _pendingRevision,
-                        _pendingScene,
-                        false,
-                        networkObject.ObjectId,
-                        sceneId: networkObject.SceneId),
-                    connection);
+                ProbeRoomObject(connection, networkObject);
             }
+        }
+
+        private bool IsCurrentRoundSignal(NetworkConnection connection, RoundSignal signal)
+        {
+            if (!CanManage || !_loading) return false;
+            if (signal.RoomId != _pendingRoom || signal.Revision != _pendingRevision || signal.Scene != _pendingScene) return false;
+            if (!connection.IsValid || !connection.IsAuthenticated || connection.ClientId == _session.Relay.LocalPlayerId) return false;
+
+            return connection.Scenes.Contains(SceneManager.GetSceneByName(_pendingScene));
+        }
+
+        // The client asked again for a room object it never received, so its observer entry is rebuilt.
+        private void RespawnRoomObject(NetworkConnection connection, RoundSignal signal, NetworkObject networkObject)
+        {
+            if (signal.ObjectId != networkObject.ObjectId || signal.SceneId != networkObject.SceneId) return;
+            if (!_pendingSceneProbes.Remove(connection.ClientId)) return;
+
+            bool wasObserver = networkObject.RemoveObserver(connection);
+            Manager.ServerManager.Objects.RebuildObservers(networkObject, connection, false);
+            bool observing = networkObject.Observers.Contains(connection);
+            string details = $"client {connection.ClientId}; object {networkObject.ObjectId}; sceneId {networkObject.SceneId}; " +
+                $"observerBefore={wasObserver}; observerAfter={observing}.";
+
+            if (observing)
+            {
+                _logger.Debug("Room spawn queued again: " + details);
+            }
+            else
+            {
+                _logger.Debug("Room spawn still blocked by observer state: " + details);
+            }
+        }
+
+        // Tells a client which room object to expect, so it can ask for it if it does not arrive.
+        private void ProbeRoomObject(NetworkConnection connection, NetworkObject networkObject)
+        {
+            if (!_pendingSceneProbes.Contains(connection.ClientId))
+            {
+                _logger.Debug($"Room spawn probe for client {connection.ClientId}: object {networkObject.ObjectId}; " +
+                    $"sceneId {networkObject.SceneId}; observer={networkObject.Observers.Contains(connection)}.");
+            }
+
+            _pendingSceneProbes.Add(connection.ClientId);
+            RoundSignal probe = new(1, _pendingRoom, _pendingRevision, _pendingScene, false, networkObject.ObjectId, sceneId: networkObject.SceneId);
+            _profiles.SendRoundSignal(probe, connection);
         }
 
         private void LoadRound()
         {
+            SurvivalGuard.Reset();
             RoundSync.ApplyProperties(_pendingData);
             _readyClients.Clear();
             _lastSceneSync.Clear();
@@ -706,7 +693,7 @@ namespace NullServers.Server
             _deadline = Time.unscaledTime + 120f;
 
             Status = "Loading the new round for all players...";
-            _logger.Msg($"Round transition: {_pendingScene}; {RoomProperties.Current.GameMode}.");
+            _logger.Debug($"Round transition: {_pendingScene}; {RoomProperties.Current.GameMode}.");
 
             try
             {
@@ -764,7 +751,7 @@ namespace NullServers.Server
             return true;
         }
 
-        private static void BeforeRoomCaption(ref string __1, GUIStyle __2, out bool __state)
+        internal static void BeforeRoomCaption(ref string __1, GUIStyle __2, out bool __state)
         {
             __state = false;
             if (!TryRenderCaption(__1, out var rendered)) return;
@@ -777,7 +764,7 @@ namespace NullServers.Server
             }
         }
 
-        private static void BeforeCaptionText(UnityEngine.UI.Text __instance, ref string __0)
+        internal static void BeforeCaptionText(UnityEngine.UI.Text __instance, ref string __0)
         {
             if (!TryRenderCaption(__0, out var rendered)) return;
 
@@ -785,7 +772,7 @@ namespace NullServers.Server
             __instance.supportRichText = true;
         }
 
-        private static void AfterRoomCaption(GUIStyle __2, bool __state)
+        internal static void AfterRoomCaption(GUIStyle __2, bool __state)
         {
             if (__state)
             {

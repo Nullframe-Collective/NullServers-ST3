@@ -1,4 +1,5 @@
 using Il2CppInterop.Runtime;
+using NullServers.Additional;
 using NullServers.Content;
 using UnityEngine;
 using UnityEngine.UI;
@@ -16,24 +17,48 @@ namespace NullServers.UI
         private readonly PauseMenu _pause;
         private readonly List<(DownloadJob Job, Text Status)> _rows = new();
         private GameUi _ui;
-        private RectTransform _root, _fill;
+        private RectTransform _root, _fill, _list;
         private Text _stats;
+        private float _nextScan;
+        private bool _offer;
+        private int _shownJobs = -1;
 
         internal DownloadPanel(ContentDownloads downloads, PauseMenu pause)
         {
             _downloads = downloads;
             _pause = pause;
+            downloads.Requested += Show;
         }
 
         internal void Update()
         {
-            if (!_downloads.Busy)
+            if (!_downloads.Visible || _root && _offer != (_downloads.Offered != null))
             {
                 Hide();
+                if (!_downloads.Visible) return;
+            }
+
+            if (!_root)
+            {
+                if (Time.unscaledTime < _nextScan) return;
+
+                _nextScan = Time.unscaledTime + 0.5f;
+                Show();
+                if (!_root) return;
+            }
+
+            if (_offer)
+            {
+                Cursor.lockState = CursorLockMode.None;
+                Cursor.visible = true;
+                _stats.text = _downloads.Offered.Length + " pack(s) needed";
                 return;
             }
 
-            if (!_root && !Build()) return;
+            if (_shownJobs != _downloads.Jobs.Count)
+            {
+                Rows();
+            }
 
             foreach (var row in _rows)
             {
@@ -44,98 +69,127 @@ namespace NullServers.UI
             long received = _downloads.Received;
             float progress = total > 0 ? Mathf.Clamp01((float)received / total) : 0f;
             _fill.anchorMax = new Vector2(progress, 1f);
-            _stats.text = total > 0
-                ? $"{Speed(_downloads.Speed)}     {Megabytes(received)} / {Megabytes(total)} MB     {Mathf.FloorToInt(progress * 100f)}%"
+            _stats.text = _downloads.Connecting ? "Connecting to the host..."
+                : total > 0 ? $"{Speed(_downloads.Speed)}     {Megabytes(received)} / {Megabytes(total)} MB     {Mathf.FloorToInt(progress * 100f)}%"
                 : "Checking packs...";
         }
 
-        private bool Build()
-        {
-            Button template = _pause.Settings;
-            Canvas source = template ? template.GetComponentInParent(Il2CppType.Of<Canvas>())?.Cast<Canvas>() : null;
-            if (!source) return false;
+        private const float ListHeight = 340f;
+        private const int VisibleRows = 4;
 
-            _ui = new GameUi(template);
+        private void Show()
+        {
+            if (_root) return;
+
+            Button template = _pause.Settings ? _pause.Settings : AddonMenu.MenuTemplate(inactive: true);
+            Canvas source = template ? template.GetComponentInParent(Il2CppType.Of<Canvas>(), true)?.Cast<Canvas>() : null;
+            if (!source) return;
+
+            _ui = new GameUi(template, 1f);
+            _offer = _downloads.Offered != null;
             GameObject target = new("NullFrameDownloadPanel");
             target.layer = source.gameObject.layer;
+            Object.DontDestroyOnLoad(target);
             _root = GameUi.Add<RectTransform>(target);
 
             Canvas canvas = GameUi.Add<Canvas>(target);
             canvas.renderMode = RenderMode.ScreenSpaceOverlay;
             canvas.sortingOrder = 32760;
 
-            CanvasScaler original = source.GetComponent<CanvasScaler>();
-            if (original)
-            {
-                CanvasScaler scaler = GameUi.Add<CanvasScaler>(target);
-                scaler.uiScaleMode = original.uiScaleMode;
-                scaler.referenceResolution = original.referenceResolution;
-                scaler.screenMatchMode = original.screenMatchMode;
-                scaler.matchWidthOrHeight = original.matchWidthOrHeight;
-                scaler.scaleFactor = original.scaleFactor;
-                scaler.referencePixelsPerUnit = original.referencePixelsPerUnit;
-            }
+            CanvasScaler scaler = GameUi.Add<CanvasScaler>(target);
+            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            scaler.referenceResolution = new Vector2(1920f, 1080f);
+            scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
+            scaler.matchWidthOrHeight = 1f;
 
             GameUi.Add<GraphicRaycaster>(target);
             _ui.Image(_root, Background);
 
             RectTransform body = GameUi.Rect("Body", _root);
-            GameUi.Area(body, 0.10f, 0.10f, 0.90f, 0.90f);
+            GameUi.Area(body, 0.10f, 0.06f, 0.90f, 0.94f);
 
-            Text title = _ui.Label(body, "DOWNLOADING ROOM CONTENT", 42, TextAnchor.MiddleCenter);
-            GameUi.Area(title.rectTransform, 0f, 0.87f, 1f, 1f);
+            Text title = _ui.Label(body, _offer ? "ROOM CONTENT REQUIRED" : "DOWNLOADING ROOM CONTENT", 44, TextAnchor.MiddleCenter);
+            GameUi.Area(title.rectTransform, 0f, 0.89f, 1f, 1f);
 
-            Text description = _ui.Label(body,
-                "The host's packs are downloaded and checked before they load. Checks reduce the risk, but cannot guarantee that host content is safe.", 27);
-            GameUi.Area(description.rectTransform, 0f, 0.69f, 1f, 0.85f);
-            GameUi.Fit(description, Mathf.RoundToInt(16f * _ui.Unit), description.fontSize);
+            Text description = _ui.Label(body, _offer
+                ? "This room uses packs you do not have. Download them from the host? They are checked before they load. Checks reduce the risk, but cannot guarantee that host content is safe."
+                : "The host's packs are downloaded and checked before they load. Checks reduce the risk, but cannot guarantee that host content is safe.", 25, TextAnchor.MiddleCenter);
+            GameUi.Area(description.rectTransform, 0.04f, 0.76f, 0.96f, 0.88f);
 
-            ScrollRect scroll = _ui.Scroll(body, "Packs");
-            GameUi.Area(scroll.GetComponent<RectTransform>(), 0f, 0.40f, 1f, 0.65f);
+            _list = GameUi.Rect("Packs", body);
+            GameUi.Area(_list, 0f, 0.74f, 1f, 0.74f);
+            _list.offsetMin = new Vector2(0f, -ListHeight);
 
-            float top = 0f;
-            _rows.Clear();
-
-            foreach (DownloadJob job in _downloads.Jobs)
-            {
-                _rows.Add((job, Row(scroll.content, top, job)));
-                top += 118f;
-            }
-
-            _ui.Height(scroll.content, top);
-
-            _stats = _ui.Label(body, "", 26, TextAnchor.MiddleCenter);
-            GameUi.Area(_stats.rectTransform, 0f, 0.29f, 1f, 0.36f);
+            _stats = _ui.Label(body, "", 28, TextAnchor.MiddleCenter);
+            GameUi.Area(_stats.rectTransform, 0f, 0.24f, 1f, 0.31f);
 
             RectTransform bar = GameUi.Rect("Progress", body);
-            GameUi.Area(bar, 0f, 0.23f, 1f, 0.27f);
+            GameUi.Area(bar, 0f, 0.19f, 1f, 0.225f);
             _ui.Image(bar, Track, false);
 
             _fill = GameUi.Rect("Fill", bar);
             GameUi.Area(_fill, 0f, 0f, 0f, 1f);
             _ui.Image(_fill, Fill, false);
 
+            _rows.Clear();
+            _shownJobs = -1;
+            if (_offer)
+            {
+                bar.gameObject.SetActive(false);
+                AddonPack[] packs = _downloads.Offered;
+                for (int index = 0; index < packs.Length && index < VisibleRows; index++)
+                {
+                    Row(index, packs.Length, packs[index].Name, packs[index].Path).text = "Not installed";
+                }
+
+                Button leave = _ui.Button(body, "Leave", _downloads.Decline);
+                GameUi.Area(leave.GetComponent<RectTransform>(), 0f, 0f, 0.49f, 0.11f);
+                Button download = _ui.Button(body, "Download", _downloads.Accept);
+                GameUi.Area(download.GetComponent<RectTransform>(), 0.51f, 0f, 1f, 0.11f);
+                return;
+            }
+
             Button cancel = _ui.Button(body, "Cancel", _downloads.Cancel);
-            GameUi.Area(cancel.GetComponent<RectTransform>(), 0.25f, 0f, 0.75f, 0.10f);
-            return true;
+            GameUi.Area(cancel.GetComponent<RectTransform>(), 0.25f, 0f, 0.75f, 0.11f);
         }
 
-        private Text Row(RectTransform parent, float top, DownloadJob job)
+        private void Rows()
         {
-            RectTransform row = _ui.Row(parent, top, 106f);
-            _ui.SetRow(row, top, 84f, 0f, 18f);
-            _ui.Image(row, new Color(1f, 1f, 1f, 0.035f), false);
+            GameUi.Clear(_list);
+            _rows.Clear();
+            int count = _downloads.Jobs.Count;
+            _shownJobs = count;
 
-            Text title = _ui.Label(row, job.Name, 28);
-            GameUi.Area(title.rectTransform, 0.02f, 0.55f, 0.64f, 1f);
-            GameUi.Fit(title, Mathf.RoundToInt(16f * _ui.Unit), title.fontSize);
+            for (int index = 0; index < count; index++)
+            {
+                DownloadJob job = _downloads.Jobs[index];
+                if (index < VisibleRows)
+                {
+                    _rows.Add((job, Row(index, count, job.Name, job.Kind + "  ·  " + Megabytes(job.Size) + " MB")));
+                }
+            }
+        }
+
+        private Text Row(int index, int count, string name, string details)
+        {
+            float height = ListHeight / Mathf.Clamp(count, 3, VisibleRows);
+            RectTransform row = GameUi.Rect("Pack", _list);
+            _ui.SetRow(row, index * height, height - 10f);
+            _ui.Image(row, new Color(1f, 1f, 1f, 0.05f), false);
+
+            string more = index == VisibleRows - 1 && count > VisibleRows ? $"  (+{count - VisibleRows} more)" : "";
+            Text title = _ui.Label(row, name + more, 28);
+            GameUi.Area(title.rectTransform, 0.02f, 0.48f, 0.68f, 0.96f);
+            GameUi.Fit(title, 18, title.fontSize);
             title.verticalOverflow = VerticalWrapMode.Truncate;
 
-            Text detail = _ui.Label(row, job.Kind + "  ·  " + job.Asset.Id, 19);
-            GameUi.Area(detail.rectTransform, 0.02f, 0.02f, 0.70f, 0.55f);
+            Text detail = _ui.Label(row, details, 19);
+            GameUi.Area(detail.rectTransform, 0.02f, 0.06f, 0.68f, 0.48f);
+            GameUi.Fit(detail, 14, detail.fontSize);
+            detail.verticalOverflow = VerticalWrapMode.Truncate;
 
-            Text status = _ui.Label(row, "", 23, TextAnchor.MiddleRight);
-            GameUi.Area(status.rectTransform, 0.72f, 0.08f, 0.98f, 0.92f);
+            Text status = _ui.Label(row, "", 24, TextAnchor.MiddleRight);
+            GameUi.Area(status.rectTransform, 0.68f, 0.08f, 0.98f, 0.92f);
             return status;
         }
 

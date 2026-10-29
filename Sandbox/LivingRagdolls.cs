@@ -1,6 +1,5 @@
 ﻿using Il2Cpp;
 using Il2CppFishNet.Connection;
-using Il2CppFishNet.Object;
 using UnityEngine;
 using UnityEngine.AI;
 using Object = UnityEngine.Object;
@@ -301,16 +300,12 @@ namespace NullServers.Sandbox
             actor.Bound = true;
         }
 
+        // Brings the player or NPC back where its ragdoll stood up and shows the original body again.
         private void Restore(Actor actor, Point3 position)
         {
-            if (!Alive(actor))
-            {
-                return;
-            }
+            if (!Alive(actor)) return;
 
             Vector3 destination = position == null ? actor.Source.transform.position : SandboxWorld.Vector(position);
-            NavMeshAgent agent = actor.Source.GetComponent<NavMeshAgent>();
-
             if (position != null && actor.Source)
             {
                 actor.Source.transform.position = destination;
@@ -318,36 +313,7 @@ namespace NullServers.Sandbox
 
             if (actor.State.Player == _world.LocalId)
             {
-                FPScontroller movement = _world.LocalMovement;
-                if (movement)
-                {
-                    bool enabled = actor.LocalController == movement.Controller ? actor.ControllerEnabled : movement.Controller && movement.Controller.enabled;
-                    if (movement.Controller)
-                    {
-                        movement.Controller.enabled = false;
-                    }
-
-                    if (position != null)
-                    {
-                        movement.transform.position = SandboxWorld.Vector(position);
-                    }
-
-                    if (movement.Movement != null)
-                    {
-                        movement.Movement.velocity = Vector3.zero;
-                    }
-
-                    if (movement.Controller)
-                    {
-                        movement.Controller.enabled = enabled;
-                    }
-                }
-
-                if (actor.Camera)
-                {
-                    actor.Camera.transform.localPosition = actor.CameraPosition;
-                    actor.Camera.transform.localRotation = actor.CameraRotation;
-                }
+                RestoreLocalPlayer(actor, position);
             }
 
             foreach (var item in actor.Renderers)
@@ -374,9 +340,45 @@ namespace NullServers.Sandbox
                 }
             }
 
+            NavMeshAgent agent = actor.Source.GetComponent<NavMeshAgent>();
             if (actor.State.NPC >= 0 && agent && agent.enabled && agent.isOnNavMesh)
             {
                 agent.Warp(destination);
+            }
+        }
+
+        // The character controller is switched off while the local player is moved, otherwise it pushes them back.
+        private void RestoreLocalPlayer(Actor actor, Point3 position)
+        {
+            FPScontroller movement = _world.LocalMovement;
+            if (movement)
+            {
+                bool enabled = actor.LocalController == movement.Controller ? actor.ControllerEnabled : movement.Controller && movement.Controller.enabled;
+                if (movement.Controller)
+                {
+                    movement.Controller.enabled = false;
+                }
+
+                if (position != null)
+                {
+                    movement.transform.position = SandboxWorld.Vector(position);
+                }
+
+                if (movement.Movement != null)
+                {
+                    movement.Movement.velocity = Vector3.zero;
+                }
+
+                if (movement.Controller)
+                {
+                    movement.Controller.enabled = enabled;
+                }
+            }
+
+            if (actor.Camera)
+            {
+                actor.Camera.transform.localPosition = actor.CameraPosition;
+                actor.Camera.transform.localRotation = actor.CameraRotation;
             }
         }
 

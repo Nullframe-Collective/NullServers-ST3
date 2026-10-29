@@ -22,6 +22,27 @@ namespace NullServers.Content
             _ => null
         };
 
+        internal static string Folder(PackKind kind) => kind switch
+        {
+            PackKind.Weapon => "CustomWeapons",
+            PackKind.Cosmetic => "CustomCustomization",
+            _ => "CustomNPCs"
+        };
+
+        internal static bool SafeFolder(string name) =>
+            name is { Length: > 0 and <= 64 } &&
+            name.Trim() == name &&
+            !name.EndsWith('.') &&
+            name.IndexOfAny(Path.GetInvalidFileNameChars()) < 0 &&
+            !Reserved.Contains(name.Split('.')[0].ToUpperInvariant());
+
+        private static readonly HashSet<string> Reserved = new(StringComparer.Ordinal)
+        {
+            "CON", "PRN", "AUX", "NUL",
+            "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+        };
+
         internal static string Definition(PackKind kind) => kind switch
         {
             PackKind.Weapon => "weapon.json",

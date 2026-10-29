@@ -27,6 +27,7 @@ namespace NullServers.Network
         private readonly MelonLogger.Instance _logger;
 
         private readonly Dictionary<int, Peer> _peers = new();
+        private readonly List<(float At, bool Accepted)> _departures = new();
         private RoomMultiplayerMenu _menu;
         private RoomMultiplayerMenu _queuedMenu;
         private string _room;
@@ -42,11 +43,14 @@ namespace NullServers.Network
 
         private NetworkManager Manager => NetBootstrap.Current ? NetBootstrap.Current.Network : null;
 
+        // Only inside a real relay room. Play Solo runs without one, and when it ends the game turns offline mode off
+        // before the round is gone; without a room the client would otherwise time out and show a room notice.
         private bool Active =>
             _session.IsNullFrame &&
             !_session.IsSwitching &&
             _session.Relay &&
             !_session.Relay.OfflineMode &&
+            _room != null &&
             _session.Relay.CurrentRoom?.Id == _room &&
             _menu &&
             _menu == RoomMultiplayerMenu.Current;
@@ -131,103 +135,23 @@ namespace NullServers.Network
         {
             Invalidate();
             RoomMultiplayerMenu menu = RoomMultiplayerMenu.Current;
-            string room = _session.IsNullFrame && !_session.IsSwitching ? _session.Relay?.CurrentRoom?.Id : null;
+            string room = _session.IsNullFrame && !_session.IsSwitching && _session.Relay && !_session.Relay.OfflineMode
+                ? _session.Relay.CurrentRoom?.Id : null;
 
             if (_menu != menu || _room != room)
             {
-                _menu = menu;
-                _room = room;
-                _revision = null;
-                _accepted = false;
-                _required = null;
-                _peers.Clear();
-                _deadline = Time.unscaledTime + 30f;
-                _pendingOffer = null;
-                Status = null;
-
-                if (_queuedMenu != menu)
-                {
-                    _queuedMenu = null;
-                }
+                ResetForRoom(menu, room);
             }
 
-            if (!Active || !Manager || !_menu.IsInitialized || !_profiles.ProtocolAvailable)
-            {
-                return;
-            }
+            if (!Active || !Manager || !_menu.IsInitialized || !_profiles.ProtocolAvailable) return;
 
-            if (Downloads?.Busy == true)
-            {
-                _deadline = Time.unscaledTime + 30f;
-            }
-            else if (_pendingOffer != null && Downloads?.TakeCompleted() == true)
-            {
-                FrameworkMessage offer = _pendingOffer;
-                _pendingOffer = null;
-                _deadline = Time.unscaledTime + 30f;
-                Receive(offer);
-            }
+            UpdateDownloads();
 
             if (Manager.ServerManager.Started)
             {
                 _revision ??= Guid.NewGuid().ToString("N");
-
-                List<NetworkConnection> connections = new();
-
-                foreach (NetworkConnection connection in Manager.ServerManager.Clients.Values)
-                {
-                    connections.Add(connection);
-                }
-
-                foreach (NetworkConnection connection in connections)
-                {
-                    if (!connection.IsAuthenticated || connection.ClientId == RelayProtocol.HostPlayerId)
-                    {
-                        continue;
-                    }
-
-                    if (!_peers.TryGetValue(connection.ClientId, out var peer) || peer.Connection != connection.Pointer)
-                    {
-                        _peers[connection.ClientId] = peer = new Peer
-                        {
-                            Connection = connection.Pointer,
-                            Deadline = Time.unscaledTime + 30f
-                        };
-                    }
-
-                    if (peer.Accepted)
-                    {
-                        continue;
-                    }
-
-                    if (Time.unscaledTime > peer.Deadline)
-                    {
-                        Manager.ServerManager.Kick(
-                            connection,
-                            Il2CppFishNet.Managing.Server.KickReason.Unset,
-                            LoggingType.Common,
-                            peer.Error ?? "NullServers requires compatible frameworks and content.");
-
-                        peer.Deadline = Time.unscaledTime + 5f;
-                        continue;
-                    }
-
-                    if (peer.Error != null)
-                    {
-                        continue;
-                    }
-
-                    if (Time.unscaledTime >= peer.NextOffer)
-                    {
-                        peer.NextOffer = Time.unscaledTime + 2f;
-                        _profiles.SendFramework(Message(FrameworkStage.Offer, _session.Content), connection);
-                    }
-                }
-
-                foreach (int id in _peers.Keys.Where(id => !Manager.ServerManager.Clients.ContainsKey(id)).ToArray())
-                {
-                    _peers.Remove(id);
-                }
+                OfferToNewClients();
+                CollectDepartures();
             }
             else if (!Ready && Time.unscaledTime > _deadline)
             {
@@ -236,17 +160,123 @@ namespace NullServers.Network
                 _session.ShowAddonError(Status, waiting == null ? AddonNoticeKind.Room : AddonNoticeKind.Unavailable);
                 _logger.Error(Status);
                 _session.Relay.StopConnection(false);
-
                 return;
             }
 
+            // A spawn that was held until the content was confirmed happens now.
             if (Ready && _queuedMenu == _menu)
             {
                 RoomMultiplayerMenu queued = _queuedMenu;
-                string team = _queuedTeam;
                 _queuedMenu = null;
-                queued.SpawnPlayer(team);
+                queued.SpawnPlayer(_queuedTeam);
             }
+        }
+
+        private void ResetForRoom(RoomMultiplayerMenu menu, string room)
+        {
+            _menu = menu;
+            _room = room;
+            _revision = null;
+            _accepted = false;
+            _required = null;
+            _peers.Clear();
+            _departures.Clear();
+            _deadline = Time.unscaledTime + 30f;
+            _pendingOffer = null;
+            Status = null;
+
+            if (_queuedMenu != menu)
+            {
+                _queuedMenu = null;
+            }
+        }
+
+        // While packs download, or the player decides whether to download them, the connection is not timed out.
+        // When the download is approved or finished, the host's last offer is answered again.
+        private void UpdateDownloads()
+        {
+            if (Downloads == null) return;
+
+            if (Downloads.Busy || Downloads.Offered != null)
+            {
+                _deadline = Time.unscaledTime + 30f;
+                return;
+            }
+
+            if (_pendingOffer == null) return;
+            if (!Downloads.TakeAccepted() && !Downloads.TakeCompleted()) return;
+
+            FrameworkMessage offer = _pendingOffer;
+            _pendingOffer = null;
+            _deadline = Time.unscaledTime + 30f;
+            Receive(offer);
+        }
+
+        // The host offers its content list to every client that has not confirmed it yet, and kicks clients that run out of time.
+        private void OfferToNewClients()
+        {
+            List<NetworkConnection> connections = new();
+            foreach (NetworkConnection connection in Manager.ServerManager.Clients.Values)
+            {
+                connections.Add(connection);
+            }
+
+            foreach (NetworkConnection connection in connections)
+            {
+                if (!connection.IsAuthenticated || connection.ClientId == RelayProtocol.HostPlayerId) continue;
+
+                if (!_peers.TryGetValue(connection.ClientId, out Peer peer) || peer.Connection != connection.Pointer)
+                {
+                    peer = new Peer { Connection = connection.Pointer, Deadline = Time.unscaledTime + 30f };
+                    _peers[connection.ClientId] = peer;
+                }
+
+                if (peer.Accepted) continue;
+
+                if (Time.unscaledTime > peer.Deadline)
+                {
+                    string reason = peer.Error ?? "NullServers requires compatible frameworks and content.";
+                    Manager.ServerManager.Kick(connection, Il2CppFishNet.Managing.Server.KickReason.Unset, LoggingType.Common, reason);
+                    peer.Deadline = Time.unscaledTime + 5f;
+                    continue;
+                }
+
+                if (peer.Error != null || Time.unscaledTime < peer.NextOffer) continue;
+
+                peer.NextOffer = Time.unscaledTime + 2f;
+                _profiles.SendFramework(Message(FrameworkStage.Offer, _session.Content), connection);
+            }
+        }
+
+        private void CollectDepartures()
+        {
+            NetworkManager manager = Manager;
+            if (!manager || !manager.ServerManager.Started) return;
+
+            foreach (var pair in _peers.ToArray())
+            {
+                if (manager.ServerManager.Clients.TryGetValue(pair.Key, out var connection) &&
+                    connection.Pointer == pair.Value.Connection &&
+                    connection.IsValid)
+                {
+                    continue;
+                }
+
+                _departures.Add((Time.unscaledTime, pair.Value.Accepted));
+                _peers.Remove(pair.Key);
+            }
+        }
+
+        internal bool QuietDeparture()
+        {
+            CollectDepartures();
+            _departures.RemoveAll(item => Time.unscaledTime - item.At > 5f);
+
+            int index = _departures.FindIndex(item => !item.Accepted);
+            if (index < 0 || _departures.Any(item => item.Accepted)) return false;
+
+            _departures.RemoveAt(index);
+            return true;
         }
 
         private bool Matches(FrameworkMessage message) =>
@@ -276,7 +306,7 @@ namespace NullServers.Network
             {
                 peer.Accepted = true;
                 _profiles.SendFramework(Message(FrameworkStage.Accepted), connection);
-                _logger.Msg("Frameworks confirmed for client " + connection.ClientId + ".");
+                _logger.Debug("Frameworks confirmed for client " + connection.ClientId + ".");
             }
             else if (error != null)
             {
@@ -287,64 +317,21 @@ namespace NullServers.Network
             }
         }
 
+        // A client receives the host's content offer and the host's answer to our content request here.
         private void Receive(FrameworkMessage message)
         {
-            if (!Matches(message) || !Manager || Manager.ServerManager.Started)
-            {
-                return;
-            }
+            if (!Matches(message) || !Manager || Manager.ServerManager.Started) return;
 
             if (message.Stage == FrameworkStage.Offer)
             {
-                if (message.InteractionApi != 3)
-                {
-                    Status = "Update NullServers on both the host and client to use this room's interaction protocol.";
-                    _session.ShowAddonError(Status, AddonNoticeKind.Room);
-                    _session.Relay.StopConnection(false);
-                    return;
-                }
-
-                bool matches = _session.MatchesContent(message.Manifest);
-                if (matches && Downloads?.Prepare(message.Manifest) == true)
-                {
-                    _pendingOffer = message;
-                    Status = "Downloading room content from the host...";
-                    return;
-                }
-
-                if (!matches || !_session.SelectContent(message.Manifest))
-                {
-                    Status = matches ? _session.AddonNotice?.Error :
-                        "The host's addon requirements changed. Refresh the room list before joining.";
-
-                    if (!matches)
-                    {
-                        _session.ShowAddonError(Status, AddonNoticeKind.Room);
-                    }
-
-                    _logger.Error(Status);
-                    _session.Relay.StopConnection(false);
-
-                    return;
-                }
-
-                _required = message.Manifest;
-                Invalidate();
-
-                if (!FrameworkContent.Ready(message.Manifest))
-                {
-                    return;
-                }
-
-                _revision = message.Revision;
-                _profiles.SendFramework(Message(FrameworkStage.Request, _session.Content.For(message.Manifest)));
+                ReceiveOffer(message);
             }
             else if (message.Revision == _revision && message.Stage == FrameworkStage.Accepted)
             {
                 _accepted = true;
                 Invalidate();
                 Status = null;
-                _logger.Msg("Frameworks and content confirmed by the host.");
+                _logger.Debug("Frameworks and content confirmed by the host.");
             }
             else if (message.Revision == _revision && message.Stage == FrameworkStage.Rejected)
             {
@@ -353,6 +340,55 @@ namespace NullServers.Network
                 _logger.Error(Status);
                 _session.Relay.StopConnection(false);
             }
+        }
+
+        // Missing room content is downloaded first (after asking the player if needed),
+        // then the client requests to join with the content it has selected.
+        private void ReceiveOffer(FrameworkMessage message)
+        {
+            if (message.InteractionApi != 3)
+            {
+                Status = "Update NullServers on both the host and client to use this room's interaction protocol.";
+                _session.ShowAddonError(Status, AddonNoticeKind.Room);
+                _session.Relay.StopConnection(false);
+                return;
+            }
+
+            bool matches = _session.MatchesContent(message.Manifest);
+            if (matches && Downloads?.Prepare(message.Manifest) == true)
+            {
+                _pendingOffer = message;
+                Status = "Downloading room content from the host...";
+                return;
+            }
+
+            if (matches && Downloads?.Ask(message.Manifest) == true)
+            {
+                _pendingOffer = message;
+                Status = "Waiting for download approval...";
+                return;
+            }
+
+            if (!matches || !_session.SelectContent(message.Manifest))
+            {
+                Status = matches ? _session.AddonNotice?.Error : "The host's addon requirements changed. Refresh the room list before joining.";
+                if (!matches)
+                {
+                    _session.ShowAddonError(Status, AddonNoticeKind.Room);
+                }
+
+                _logger.Error(Status);
+                _session.Relay.StopConnection(false);
+                return;
+            }
+
+            _required = message.Manifest;
+            Invalidate();
+
+            if (!FrameworkContent.Ready(message.Manifest)) return;
+
+            _revision = message.Revision;
+            _profiles.SendFramework(Message(FrameworkStage.Request, _session.Content.For(message.Manifest)));
         }
     }
 }

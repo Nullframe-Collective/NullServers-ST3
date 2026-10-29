@@ -1,5 +1,4 @@
 ﻿using NullServers.Additional;
-using System.Net.Http;
 using System.Text;
 
 namespace NullServers.Server

@@ -63,8 +63,14 @@
         RenderOptions Rendering = null,
         bool KeepRagdolls = false,
         bool ThrowAnyone = false,
-        WorldSettings World = null)
+        WorldSettings World = null,
+        bool AllowProne = false,
+        float FlightSpeed = 7f,
+        bool FlightNoclip = true)
     {
-        internal bool Valid => (Rendering == null || Rendering.Valid) && (World == null || World.Valid);
+        internal const float MinFlightSpeed = 1f, MaxFlightSpeed = 60f;
+
+        internal bool Valid => (Rendering == null || Rendering.Valid) && (World == null || World.Valid) &&
+            float.IsFinite(FlightSpeed) && FlightSpeed is >= MinFlightSpeed and <= MaxFlightSpeed;
     }
 }

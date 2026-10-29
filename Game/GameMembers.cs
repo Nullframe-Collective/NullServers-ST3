@@ -99,6 +99,12 @@ namespace NullServers
                 get => movement.DBNLEAKGLGC;
                 set => movement.DBNLEAKGLGC = value;
             }
+
+            internal bool Prone
+            {
+                get => movement.NDBHHAHAAKN;
+                set => movement.NDBHHAHAAKN = value;
+            }
         }
 
         extension(SyncCustomization sync)

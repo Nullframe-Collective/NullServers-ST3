@@ -16,6 +16,7 @@ namespace NullServers.UI
         private readonly Font _font;
         private readonly Sprite _buttonSprite;
         private readonly Button _buttonTemplate;
+        private readonly bool _styled;
         private readonly Slider _sliderTemplate;
         private readonly Color _textColor = Ink;
 
@@ -27,15 +28,16 @@ namespace NullServers.UI
             Unit = Mathf.Max(0.5f, volume.Panel.rect.height / 1080f);
         }
 
-        internal GameUi(Button button)
+        internal GameUi(Button button, float? unit = null)
         {
             _buttonTemplate = button;
+            _styled = true;
             _font = button.GetComponentInChildren(Il2CppType.Of<Text>(), true).Cast<Text>().font;
             _textColor = Color.white;
             _sliderTemplate = button.transform.parent.parent.GetComponentsInChildren<Slider>(true)
                 .FirstOrDefault(slider => slider.fillRect && slider.handleRect);
-            Canvas canvas = button.GetComponentInParent(Il2CppType.Of<Canvas>()).Cast<Canvas>();
-            Unit = canvas.GetComponent<RectTransform>().rect.height / 1080f;
+            Canvas canvas = button.GetComponentInParent(Il2CppType.Of<Canvas>(), true).Cast<Canvas>();
+            Unit = unit ?? canvas.GetComponent<RectTransform>().rect.height / 1080f;
         }
 
         internal static T Add<T>(GameObject target) where T : Il2CppInterop.Runtime.InteropTypes.Il2CppObjectBase
@@ -137,20 +139,20 @@ namespace NullServers.UI
             Text text = Add<Text>(Rect("Label", parent).gameObject);
             text.font = _font;
             text.text = value;
-            text.fontSize = Mathf.RoundToInt(size * Unit * (_buttonTemplate ? 1.25f : 1f));
+            text.fontSize = Mathf.RoundToInt(size * Unit * (_styled ? 1.25f : 1f));
             text.alignment = alignment;
             text.color = _textColor;
             text.supportRichText = false;
             text.raycastTarget = false;
             text.horizontalOverflow = HorizontalWrapMode.Wrap;
-            text.verticalOverflow = _buttonTemplate ? VerticalWrapMode.Overflow : VerticalWrapMode.Truncate;
+            text.verticalOverflow = _styled ? VerticalWrapMode.Overflow : VerticalWrapMode.Truncate;
 
             return text;
         }
 
         internal Button Button(Transform parent, string value, Action clicked, Color? tint = null)
         {
-            Button button = Control<Button>("Button", parent, _buttonTemplate ? Color.white : tint ?? Color.white);
+            Button button = Control<Button>("Button", parent, _styled ? Color.white : tint ?? Color.white);
             if (_buttonTemplate)
             {
                 Frame(button);
@@ -171,16 +173,16 @@ namespace NullServers.UI
             Navigation navigation = button.navigation;
             navigation.mode = Navigation.Mode.None;
             button.navigation = navigation;
-            int size = _buttonTemplate ? 38 : 23;
+            int size = _styled ? 38 : 23;
             Text label = Label(button.transform, value, size, TextAnchor.MiddleCenter);
             Inset(label, 8f, 2f);
-            Fit(label, Mathf.RoundToInt((_buttonTemplate ? 26f : 14f) * Unit), Mathf.RoundToInt(size * Unit));
+            Fit(label, Mathf.RoundToInt((_styled ? 26f : 14f) * Unit), Mathf.RoundToInt(size * Unit));
             OnClick(button, clicked);
 
             return button;
         }
 
-        private void Frame(Selectable control)
+        internal void Frame(Selectable control)
         {
             for (int index = 0; index < 4; index++)
             {
@@ -261,11 +263,11 @@ namespace NullServers.UI
                 input.colors = colors;
             }
 
-            Text label = Label(input.transform, value, _buttonTemplate ? 27 : 22);
+            Text label = Label(input.transform, value, _styled ? 27 : 22);
             Inset(label, 10f, 2f);
             input.textComponent = label;
-            Text hint = Label(input.transform, placeholder, _buttonTemplate ? 27 : 21);
-            hint.color = _buttonTemplate ? new Color(1f, 1f, 1f, 0.4f) : new Color(0.46f, 0.49f, 0.53f);
+            Text hint = Label(input.transform, placeholder, _styled ? 27 : 21);
+            hint.color = _styled ? new Color(1f, 1f, 1f, 0.4f) : new Color(0.46f, 0.49f, 0.53f);
             Inset(hint, 10f, 2f);
             input.placeholder = hint;
             input.characterLimit = limit;
@@ -360,7 +362,7 @@ namespace NullServers.UI
             content.anchorMin = new Vector2(0f, 1f);
             content.anchorMax = Vector2.one;
             content.pivot = new Vector2(0.5f, 1f);
-            content.sizeDelta = Vector2.zero;
+            content.sizeDelta = new Vector2(-4f * Unit, 0f);
             scroll.viewport = viewport;
             scroll.content = content;
 
@@ -368,10 +370,10 @@ namespace NullServers.UI
             Area(track, 1f, 0f, 1f, 1f);
             track.offsetMin = new Vector2(-12 * Unit, 0f);
             track.offsetMax = Vector2.zero;
-            Image(track, _buttonTemplate ? new Color(1f, 1f, 1f, 0.08f) : new Color(0.79f, 0.81f, 0.84f));
+            Image(track, _styled ? new Color(1f, 1f, 1f, 0.08f) : new Color(0.79f, 0.81f, 0.84f));
 
             RectTransform handle = Rect("Handle", track);
-            Image handleImage = Image(handle, _buttonTemplate ? new Color(0.8f, 0.83f, 0.87f, 0.75f) : new Color(0.43f, 0.47f, 0.52f));
+            Image handleImage = Image(handle, _styled ? new Color(0.8f, 0.83f, 0.87f, 0.75f) : new Color(0.43f, 0.47f, 0.52f));
 
             Scrollbar bar = Add<Scrollbar>(track.gameObject);
             bar.targetGraphic = handleImage;

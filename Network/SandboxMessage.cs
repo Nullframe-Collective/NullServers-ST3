@@ -46,7 +46,12 @@ namespace NullServers.Network
         GoTo,
         Launch,
         Rename,
-        Reset
+        Reset,
+        Console,
+        Option,
+        FriendlyFire,
+        DisableAI,
+        RemoveAllAI
     }
 
     internal sealed record Point3(float X, float Y, float Z)

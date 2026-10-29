@@ -26,7 +26,7 @@ namespace NullServers.Room
 
             try
             {
-                using var document = JsonDocument.Parse(data, new JsonDocumentOptions { MaxDepth = 12 });
+                using JsonDocument document = JsonDocument.Parse(data, new JsonDocumentOptions { MaxDepth = 12 });
                 if (document.RootElement.ValueKind != JsonValueKind.Object ||
                     !document.RootElement.TryGetProperty("CustomMode", out var custom) || custom.ValueKind != JsonValueKind.Object ||
                     !custom.TryGetProperty("Protocol", out var protocol) || protocol.ValueKind != JsonValueKind.Number ||

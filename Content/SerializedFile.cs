@@ -157,7 +157,7 @@ namespace NullServers.Content
                     throw new InvalidDataException("Type tree is too large.");
                 }
 
-                var raw = new (int Level, uint TypeOffset, uint NameOffset, int Size, int Flags)[nodeCount];
+                (int Level, uint TypeOffset, uint NameOffset, int Size, int Flags)[] raw = new (int Level, uint TypeOffset, uint NameOffset, int Size, int Flags)[nodeCount];
                 for (int index = 0; index < nodeCount; index++)
                 {
                     reader.UInt16();

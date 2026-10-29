@@ -7,7 +7,8 @@
         Appearance,
         Spawn,
         Notification,
-        Broadcast
+        Broadcast,
+        Voice
     }
 
     internal sealed class RpcBudget
@@ -56,6 +57,7 @@
                     RpcCategory.Spawn => (12, 32),
                     RpcCategory.Notification => (8, 20),
                     RpcCategory.Broadcast => (20, 50),
+                    RpcCategory.Voice => (60, 120),
                     _ => (200, 400)
                 };
 

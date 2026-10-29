@@ -18,6 +18,7 @@ namespace NullServers.Additional
         private readonly List<(MethodInfo Method, MethodInfo Patch)> _patches = new();
         private readonly bool _customization;
         private bool _loaded;
+        private bool _reloaded;
         private int? _hat;
         private int _mappedHat;
         private int _hatBase;
@@ -97,6 +98,20 @@ namespace NullServers.Additional
 
             if (!_loaded) return null;
 
+            string missing = MissingPack();
+            if (missing != null && _customization && !_reloaded)
+            {
+                _reloaded = true;
+                _addon.Catalog.GetMethod("Refresh", Type.EmptyTypes)?.Invoke(null, null);
+                missing = MissingPack();
+            }
+
+            return missing == null ? null : "Required pack " + missing + " could not load its " +
+                (_customization ? "menu/TPS prefabs." : "FPS/TPS prefabs and Animation component.");
+        }
+
+        private string MissingPack()
+        {
             IDictionary bundles = _addon.Core.GetField("LoadedBundles")?.GetValue(null) as IDictionary;
 
             foreach (object item in _selected)
@@ -107,8 +122,7 @@ namespace NullServers.Additional
                 if (prefabs is not { Length: >= 2 } || !prefabs[0] || !prefabs[1] ||
                     !_customization && !prefabs[0].GetComponentInChildren<Animation>(true))
                 {
-                    return "Required pack " + name + " could not load its " +
-                        (_customization ? "menu/TPS prefabs." : "FPS/TPS prefabs and Animation component.");
+                    return name ?? "";
                 }
             }
 

@@ -1,8 +1,6 @@
-using HarmonyLib;
 using Il2Cpp;
 using Il2CppFishNet.Connection;
 using Il2CppFishNet.Managing;
-using Il2CppFishNet.Managing.Server;
 using Il2CppFishNet.Object;
 using Il2CppFishNet.Serializing;
 using Il2CppFishNet.Transporting;
@@ -21,10 +19,11 @@ namespace NullServers.Server
             Malformed,
             Flood,
             Prohibited,
-            Throttled
+            Throttled,
+            Dropped
         }
 
-        private sealed class Client
+        internal sealed class Client
         {
             internal NetworkConnection Connection;
             internal string Account;
@@ -34,9 +33,10 @@ namespace NullServers.Server
             internal string PendingBan;
             internal bool Removed;
             internal float NextLog;
+            internal float NextReport;
         }
 
-        private sealed record Frame(PooledReader Reader, Client Client, int End, bool Reliable)
+        internal sealed record Frame(PooledReader Reader, Client Client, int End, bool Reliable)
         {
             internal bool ExpensiveSpawn;
             internal bool ConsoleSpawn;
@@ -56,71 +56,12 @@ namespace NullServers.Server
         internal int Blocked { get; private set; }
         internal int Removed { get; private set; }
 
-        internal AntiCrash(HarmonyLib.Harmony harmony, ServerControl control, MelonLogger.Instance logger)
+        internal AntiCrash(ServerControl control, MelonLogger.Instance logger)
         {
             _instance = this;
             _control = control;
             _logger = logger;
-
-            harmony.Patch(
-                AccessTools.Method(typeof(ServerObjects), nameof(ServerObjects.ParseServerRpc)),
-                prefix: First(nameof(BeforeRpc)),
-                finalizer: new HarmonyMethod(typeof(AntiCrash), nameof(AfterPacket)));
-
-            harmony.Patch(
-                AccessTools.Method(typeof(ServerManager), nameof(ServerManager.ParseBroadcast)),
-                prefix: First(nameof(BeforeBroadcast)),
-                finalizer: new HarmonyMethod(typeof(AntiCrash), nameof(AfterPacket)));
-
-            harmony.Patch(
-                AccessTools.Method(typeof(NetworkBehaviour), nameof(NetworkBehaviour.ReadServerRpc)),
-                prefix: First(nameof(BeforeMethod)));
-
-            harmony.Patch(
-                AccessTools.Method(typeof(Reader), nameof(Reader.IsPossibleAllocationAttack)),
-                postfix: new HarmonyMethod(typeof(AntiCrash), nameof(AfterAllocationCheck)));
-
-            harmony.Patch(
-                AccessTools.Method(
-                    typeof(CPPBDGGKHCB),
-                    nameof(CPPBDGGKHCB.FONDGACBGAB),
-                    [
-                        typeof(GameObject),
-                        typeof(Vector3),
-                        typeof(Quaternion),
-                        typeof(NetworkConnection)
-                    ]),
-                prefix: First(nameof(BeforeSpawnPrefab)),
-                postfix: new HarmonyMethod(typeof(AntiCrash), nameof(AfterSpawned)),
-                finalizer: new HarmonyMethod(typeof(AntiCrash), nameof(AfterSpawnPrefab)));
-
-            harmony.Patch(
-                AccessTools.Method(typeof(RelayTransport), nameof(RelayTransport.CanSpawnNetworkObject)),
-                prefix: First(nameof(BeforeObjectSpawn)));
-                PatchReader(harmony, typeof(MultiplayerChat), nameof(MultiplayerChat.NKOMILAFHFN), nameof(CheckChat));
-                PatchReader(harmony, typeof(SyncCustomization), nameof(SyncCustomization.LAEBMFBEDKM), nameof(CheckAppearance));
-                PatchReader(harmony, typeof(Volume), nameof(Volume.AKLPGOIKAHF), nameof(CheckSpawn));
-                PatchReader(harmony, typeof(PlayerNetworkController), nameof(PlayerNetworkController.EFIBFBEGIOE), nameof(CheckPlayerState));
-
-            foreach (string method in new[]
-            {
-                nameof(PlayerNetworkController.DGMPNAIOHNG),
-                nameof(PlayerNetworkController.FKGFMBJEFAM),
-                nameof(PlayerNetworkController.PPFKMGCCMKI)
-            })
-            {
-                PatchReader(harmony, typeof(PlayerNetworkController), method, nameof(CheckStringFloat));
-            }
         }
-
-        private static HarmonyMethod First(string name) => new(typeof(AntiCrash), name)
-        {
-            priority = Priority.First
-        };
-
-        private static void PatchReader(HarmonyLib.Harmony harmony, Type type, string method, string check) => harmony.Patch(
-            AccessTools.Method(type, method),
-            prefix: First(check));
 
         internal void Update()
         {
@@ -250,6 +191,20 @@ namespace NullServers.Server
             return false;
         }
 
+        private static bool Skip(Frame frame, PooledReader reader)
+        {
+            if (frame.Reliable &&
+                frame.Reader.Pointer == reader.Pointer &&
+                frame.End >= reader.Position &&
+                frame.End - reader.Position <= reader.Remaining)
+            {
+                reader.Skip(frame.End - reader.Position);
+                return false;
+            }
+
+            return Purge(reader);
+        }
+
         private bool Reject(Client client, PooledReader reader, string reason, Rejection rejection)
         {
             Blocked++;
@@ -278,27 +233,21 @@ namespace NullServers.Server
                 _logger.Warning($"Anti-Crash queued ban for client {client.Connection.ClientId}: {reason}.");
             }
 
-            if (now >= client.NextLog)
+            if (rejection == Rejection.Dropped)
+            {
+                _logger.Debug($"Anti-Crash dropped unreliable data from client {client.Connection.ClientId}: {reason}.");
+            }
+            else if (now >= client.NextLog)
             {
                 client.NextLog = now + 5f;
                 string action = rejection == Rejection.Throttled ? "throttled" : "blocked";
                 _logger.Warning($"Anti-Crash {action} client {client.Connection.ClientId}: {reason}.");
             }
 
-            if (rejection == Rejection.Throttled &&
-                _frame is { Reliable: true } frame &&
-                frame.Reader.Pointer == reader.Pointer &&
-                frame.End >= reader.Position &&
-                frame.End - reader.Position <= reader.Remaining)
-            {
-                reader.Skip(frame.End - reader.Position);
-                return false;
-            }
-
-            return Purge(reader);
+            return rejection == Rejection.Throttled && _frame is { } frame ? Skip(frame, reader) : Purge(reader);
         }
 
-        private static bool BeforeRpc(PooledReader reader, NetworkConnection conn, Channel channel, out Frame __state)
+        internal static bool BeforeRpc(PooledReader reader, NetworkConnection conn, Channel channel, out Frame __state)
         {
             __state = _frame;
 
@@ -348,7 +297,10 @@ namespace NullServers.Server
             return true;
         }
 
-        private static bool BeforeBroadcast(PooledReader reader, NetworkConnection conn, out Frame __state)
+        // Game broadcasts are checked strictly before FishNet reads them: a damaged reliable one counts toward a ban,
+        // a damaged unreliable one (it can arrive damaged without anyone cheating) is only dropped.
+        // Our own messages are read by PlayerProfiles with their own size limits, so their length never reaches the game.
+        internal static bool BeforeBroadcast(PooledReader reader, NetworkConnection conn, Channel channel, out Frame __state)
         {
             __state = _frame;
 
@@ -361,13 +313,32 @@ namespace NullServers.Server
                 return Purge(reader);
             }
 
-            if (!Data(reader, out var data) || !RpcPacket.TryBroadcast(data, out var length))
+            if (!Data(reader, out var data))
             {
-                return instance.Reject(client, reader, "invalid broadcast length", Rejection.Malformed);
+                return instance.Reject(client, reader, "invalid broadcast data", Rejection.Malformed);
             }
 
+            // FishNet sometimes reaches a broadcast with nothing left to read. It cannot harm anything once skipped.
+            if (data.Length == 0)
+            {
+                instance.ReportBroadcast(client, channel, reader, 0, 0, data);
+                return instance.Reject(client, reader, "empty broadcast", Rejection.Dropped);
+            }
+
+            if (!RpcPacket.TryBroadcast(data, out ushort key, out int length))
+            {
+                instance.ReportBroadcast(client, channel, reader, key, length, data);
+                if (!OwnBroadcast(key, channel))
+                {
+                    return instance.Reject(client, reader, "invalid broadcast length", channel == Channel.Reliable ? Rejection.Malformed : Rejection.Dropped);
+                }
+
+                length = data.Length;
+            }
+
+            RpcCategory category = key == VoicePacket.BroadcastId ? RpcCategory.Voice : RpcCategory.Broadcast;
             if (!client.Budget.AllowPacket(Time.unscaledTime, length) ||
-                !client.Budget.AllowMethod(Time.unscaledTime, IntPtr.Zero, 0, RpcCategory.Broadcast))
+                !client.Budget.AllowMethod(Time.unscaledTime, IntPtr.Zero, key, category))
             {
                 return instance.Reject(client, reader, "broadcast traffic limit", Rejection.Flood);
             }
@@ -377,7 +348,34 @@ namespace NullServers.Server
             return true;
         }
 
-        private static bool BeforeMethod(NetworkBehaviour __instance, PooledReader reader)
+        // PlayerProfiles reads these keys itself on these channels; anything else goes on to FishNet.
+        private static bool OwnBroadcast(ushort key, Channel channel)
+        {
+            if (!Players.PlayerProfiles.ReadsMessages) return false;
+            if (key is VoicePacket.BroadcastId or SandboxMessage.BroadcastId) return true;
+
+            return channel == Channel.Reliable && key is Players.ProfilePacket.BroadcastId or FrameworkMessage.BroadcastId or
+                Content.ContentMessage.BroadcastId or HatPacket.BroadcastId or ServerMessage.BroadcastId or Room.RoundSignal.BroadcastId;
+        }
+
+        // Debug builds describe an unreadable broadcast (at most once per 5 seconds per player), so a bad packet can be traced.
+        // The bytes just before the broadcast show which packet type FishNet read and what came before it.
+        private void ReportBroadcast(Client client, Channel channel, PooledReader reader, ushort key, int length, ReadOnlySpan<byte> data)
+        {
+            float now = Time.unscaledTime;
+            if (!DebugLog.Enabled || now < client.NextReport) return;
+
+            client.NextReport = now + 5f;
+            var buffer = reader._buffer;
+            int position = reader.Position;
+            int from = Math.Max(0, position - 24);
+            string before = buffer != null && position <= buffer.Length ? Convert.ToHexString(buffer.AsSpan().Slice(from, position - from)) : "?";
+            string start = Convert.ToHexString(data.Slice(0, Math.Min(16, data.Length)));
+            _logger.Msg($"Unreadable broadcast from client {client.Connection.ClientId}: key 0x{key:X4}, {channel}, " +
+                $"length {length}, {data.Length} bytes left, at {position} of {reader.Length}, before {before}, starts {start}.");
+        }
+
+        internal static bool BeforeMethod(NetworkBehaviour __instance, PooledReader reader)
         {
             Frame frame = _frame;
             if (frame == null || frame.Reader.Pointer != reader.Pointer)
@@ -421,6 +419,13 @@ namespace NullServers.Server
             frame.ExpensiveSpawn = category == RpcCategory.Spawn || __instance.TryCast<RoomMultiplayerMenu>();
 
             if (category == RpcCategory.Notification &&
+                instance._control.Compatibility is { Ready: true } compatibility &&
+                !compatibility.Allows(frame.Client.Connection))
+            {
+                return Skip(frame, reader);
+            }
+
+            if (category == RpcCategory.Notification &&
                 !RpcPacket.ValidBody(data.Slice(size, remaining - size), RpcSchema.Notification, frame.Reliable))
             {
                 return instance.Reject(frame.Client, reader, "invalid notification data", Rejection.Malformed);
@@ -445,11 +450,11 @@ namespace NullServers.Server
                 _instance.Reject(frame.Client, reader, "invalid " + schema + " data", Rejection.Malformed);
         }
 
-        private static bool CheckChat(PooledReader __0) => Check(__0, RpcSchema.Chat);
+        internal static bool CheckChat(PooledReader __0) => Check(__0, RpcSchema.Chat);
 
-        private static bool CheckAppearance(PooledReader __0) => Check(__0, RpcSchema.Appearance);
+        internal static bool CheckAppearance(PooledReader __0) => Check(__0, RpcSchema.Appearance);
 
-        private static bool CheckSpawn(PooledReader __0)
+        internal static bool CheckSpawn(PooledReader __0)
         {
             if (!Check(__0, RpcSchema.Spawn)) return false;
 
@@ -461,11 +466,11 @@ namespace NullServers.Server
             return true;
         }
 
-        private static bool CheckPlayerState(PooledReader __0) => Check(__0, RpcSchema.PlayerState);
+        internal static bool CheckPlayerState(PooledReader __0) => Check(__0, RpcSchema.PlayerState);
 
-        private static bool CheckStringFloat(PooledReader __0) => Check(__0, RpcSchema.StringFloat);
+        internal static bool CheckStringFloat(PooledReader __0) => Check(__0, RpcSchema.StringFloat);
 
-        private static void AfterAllocationCheck(Reader __instance, bool __result)
+        internal static void AfterAllocationCheck(Reader __instance, bool __result)
         {
             if (__result && _frame?.Reader.Pointer == __instance.Pointer)
             {
@@ -473,7 +478,7 @@ namespace NullServers.Server
             }
         }
 
-        private static bool BeforeSpawnPrefab(GameObject __0, NetworkConnection __3, out bool __state)
+        internal static bool BeforeSpawnPrefab(GameObject __0, NetworkConnection __3, out bool __state)
         {
             __state = _frame?.ExpensiveSpawn == true;
 
@@ -523,7 +528,7 @@ namespace NullServers.Server
             return true;
         }
 
-        private static void AfterSpawned(NetworkObject __result)
+        internal static void AfterSpawned(NetworkObject __result)
         {
             if (_frame != null && __result && __result.IsServerInitialized && !__result.IsSceneObject)
             {
@@ -531,7 +536,7 @@ namespace NullServers.Server
             }
         }
 
-        private static void AfterSpawnPrefab(bool __state)
+        internal static void AfterSpawnPrefab(bool __state)
         {
             if (_frame != null)
             {
@@ -539,7 +544,7 @@ namespace NullServers.Server
             }
         }
 
-        private static bool BeforeObjectSpawn(ref bool __result)
+        internal static bool BeforeObjectSpawn(ref bool __result)
         {
             Frame frame = _frame;
             if (frame == null) return true;
@@ -555,7 +560,7 @@ namespace NullServers.Server
             return true;
         }
 
-        private static Exception AfterPacket(Exception __exception, Frame __state)
+        internal static Exception AfterPacket(Exception __exception, Frame __state)
         {
             _frame = __state;
             return __exception;

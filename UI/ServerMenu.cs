@@ -1,5 +1,4 @@
-﻿using HarmonyLib;
-using Il2Cpp;
+﻿using Il2Cpp;
 using Il2CppFishNet.Transporting;
 using Il2CppFishNet.Transporting.Relay;
 using MelonLoader;
@@ -20,16 +19,12 @@ namespace NullServers.UI
         private Button _officialButton;
         private Button _nullFrameButton;
 
-        internal ServerMenu(HarmonyLib.Harmony harmony, MelonLogger.Instance logger, RelaySession session, CommunityMenu community)
+        internal ServerMenu(MelonLogger.Instance logger, RelaySession session, CommunityMenu community)
         {
             _instance = this;
             _session = session;
             _logger = logger;
             _community = community;
-
-            harmony.Patch(
-                AccessTools.Method(typeof(MainMenu), nameof(MainMenu.ShowLobby)),
-                postfix: new HarmonyMethod(typeof(ServerMenu), nameof(AfterShowLobby)));
         }
 
         private void ConfigureServerButtons(MainMenu menu)
@@ -81,7 +76,7 @@ namespace NullServers.UI
 
             GameUi.OnClick(_nullFrameButton, () => SelectServers(true));
 
-            _logger.Msg("Official and NullFrame servers configured through UpdaterV2 using the built-in menu buttons.");
+            _logger.Debug("Official and NullFrame servers configured through UpdaterV2 using the built-in menu buttons.");
         }
 
         private void SelectServers(bool useNullFrame)
@@ -147,7 +142,7 @@ namespace NullServers.UI
 
                 _session.IsSwitching = false;
 
-                _logger.Msg($"Selected {(_session.IsNullFrame ? "NullFrame" : "official")} servers. GameVersion: {_session.SelectedVersion ?? Application.version}.");
+                _logger.Debug($"Selected {(_session.IsNullFrame ? "NullFrame" : "official")} servers. GameVersion: {_session.SelectedVersion ?? Application.version}.");
                 _menu.SelectedServer(_session.IsNullFrame ? 1 : 0);
             }
             finally
@@ -177,7 +172,7 @@ namespace NullServers.UI
             lobby.Rooms?.Clear();
         }
 
-        private static void AfterShowLobby(MainMenu __instance)
+        internal static void AfterShowLobby(MainMenu __instance)
         {
             _instance.ConfigureServerButtons(__instance);
         }

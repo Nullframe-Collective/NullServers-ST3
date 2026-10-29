@@ -169,7 +169,7 @@ namespace NullServers.Room
             {
                 try
                 {
-                    using var document = JsonDocument.Parse(data);
+                    using JsonDocument document = JsonDocument.Parse(data);
                     if (document.RootElement.ValueKind == JsonValueKind.Object &&
                         document.RootElement.TryGetProperty("DisplayName", out var value) &&
                         value.ValueKind == JsonValueKind.String &&

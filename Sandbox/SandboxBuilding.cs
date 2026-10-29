@@ -86,182 +86,116 @@ namespace NullServers.Sandbox
             _world = world;
         }
 
+        // The host checks every building request from a player before it changes the room for everyone.
         internal string Request(int sender, SandboxMessage message)
         {
             bool admin = _world.Administrator(sender);
-            if (!_world.ConsoleEnabled && !admin)
-            {
-                return "The host must enable the sandbox console first.";
-            }
+            if (!_world.ConsoleEnabled && !admin) return "The host must enable the sandbox console first.";
 
             switch (message.Kind)
             {
                 case SandboxKind.Create:
                 case SandboxKind.Edit:
-                    BuildingObject state = message.Object;
-                    if (state == null || !state.Valid || _world.Assets.Find(state.Asset) == null)
-                    {
-                        return "This object is not available on the host.";
-                    }
-
-                    if (state.Dynamic && _objects.Values.Count(item => item.State.Dynamic && item.State.Id != state.Id) >= 64)
-                    {
-                        return "This room already has 64 building objects with active physics.";
-                    }
-
-                    if (message.Kind == SandboxKind.Create)
-                    {
-                        if (_objects.Count >= SandboxMessage.MaxObjects ||
-                            _objects.Values.Count(item => item.State.Owner == sender) >= SandboxMessage.MaxObjectsPerPlayer)
-                        {
-                            return $"Building limit reached ({SandboxMessage.MaxObjectsPerPlayer} per player, {SandboxMessage.MaxObjects} per room).";
-                        }
-
-                        PlayerNetworkController avatar = SandboxWorld.Avatar(sender);
-                        if (!avatar || Vector3.Distance(avatar.transform.position, SandboxWorld.Vector(state.Position)) > 120f)
-                        {
-                            return "Place objects within 120 metres of your character.";
-                        }
-
-                        while (_objects.ContainsKey(_nextId))
-                        {
-                            _nextId = _nextId % 999999 + 1;
-                        }
-
-                        state = state with
-                        {
-                            Id = _nextId,
-                            Owner = sender,
-                            Revision = 1
-                        };
-
-                        _nextId = _nextId % 999999 + 1;
-                    }
-                    else
-                    {
-                        if (!_objects.TryGetValue(state.Id, out var item) ||
-                            !SandboxMessage.CanEdit(item.State.Owner, sender, admin))
-                        {
-                            return "You can edit your own objects. Administrators can edit all objects.";
-                        }
-
-                        if (state.Revision != item.State.Revision)
-                        {
-                            return "The object changed. Select it again before editing.";
-                        }
-
-                        if (state.Asset != item.State.Asset)
-                        {
-                            return "Select a new prop to create a different object.";
-                        }
-
-                        state = state with
-                        {
-                            Owner = item.State.Owner,
-                            Revision = item.State.Revision + 1
-                        };
-                    }
-
-                    Apply(state);
-                    _world.Send(_world.Message(SandboxKind.Object) with
-                    {
-                        Object = state
-                    });
-
-                    return null;
+                    return Place(sender, message, admin);
                 case SandboxKind.Delete:
-
-                    if (!_objects.TryGetValue(message.Id, out var deleted) ||
-                        !SandboxMessage.CanEdit(deleted.State.Owner, sender, admin))
+                    if (!_objects.TryGetValue(message.Id, out var deleted) || !SandboxMessage.CanEdit(deleted.State.Owner, sender, admin))
                     {
                         return "You cannot delete this object.";
                     }
 
                     Remove(message.Id);
-                    _world.Send(_world.Message(SandboxKind.Delete) with
-                    {
-                        Id = message.Id
-                    });
-
+                    _world.Send(_world.Message(SandboxKind.Delete) with { Id = message.Id });
                     return null;
                 case SandboxKind.Clear:
-
-                    if (!admin)
-                    {
-                        return "Only administrators can clear the building objects.";
-                    }
+                    if (!admin) return "Only administrators can clear the building objects.";
 
                     Clear();
                     _world.Send(_world.Message(SandboxKind.Clear));
-
                     return null;
                 default:
                     return "Unknown sandbox request.";
             }
         }
 
+        private string Place(int sender, SandboxMessage message, bool admin)
+        {
+            BuildingObject state = message.Object;
+            if (state == null || !state.Valid || _world.Assets.Find(state.Asset) == null) return "This object is not available on the host.";
+
+            if (state.Dynamic && _objects.Values.Count(item => item.State.Dynamic && item.State.Id != state.Id) >= 64)
+            {
+                return "This room already has 64 building objects with active physics.";
+            }
+
+            string error = message.Kind == SandboxKind.Create ? PrepareNew(sender, ref state) : PrepareEdit(sender, admin, ref state);
+            if (error != null) return error;
+
+            Apply(state);
+            _world.Send(_world.Message(SandboxKind.Object) with { Object = state });
+            return null;
+        }
+
+        // A new object gets the next free id, the sender as its owner and its first revision.
+        private string PrepareNew(int sender, ref BuildingObject state)
+        {
+            if (_objects.Count >= SandboxMessage.MaxObjects ||
+                _objects.Values.Count(item => item.State.Owner == sender) >= SandboxMessage.MaxObjectsPerPlayer)
+            {
+                return $"Building limit reached ({SandboxMessage.MaxObjectsPerPlayer} per player, {SandboxMessage.MaxObjects} per room).";
+            }
+
+            PlayerNetworkController avatar = SandboxWorld.Avatar(sender);
+            if (!avatar || Vector3.Distance(avatar.transform.position, SandboxWorld.Vector(state.Position)) > 120f)
+            {
+                return "Place objects within 120 metres of your character.";
+            }
+
+            while (_objects.ContainsKey(_nextId))
+            {
+                _nextId = _nextId % 999999 + 1;
+            }
+
+            state = state with { Id = _nextId, Owner = sender, Revision = 1 };
+            _nextId = _nextId % 999999 + 1;
+            return null;
+        }
+
+        // An edit must be based on the latest revision, so two people cannot overwrite each other's change.
+        private string PrepareEdit(int sender, bool admin, ref BuildingObject state)
+        {
+            if (!_objects.TryGetValue(state.Id, out var item) || !SandboxMessage.CanEdit(item.State.Owner, sender, admin))
+            {
+                return "You can edit your own objects. Administrators can edit all objects.";
+            }
+
+            if (state.Revision != item.State.Revision) return "The object changed. Select it again before editing.";
+            if (state.Asset != item.State.Asset) return "Select a new prop to create a different object.";
+
+            state = state with { Owner = item.State.Owner, Revision = item.State.Revision + 1 };
+            return null;
+        }
+
+        // Creates or updates a placed object from its state. Older revisions are ignored.
         internal void Apply(BuildingObject state)
         {
-            if (_objects.TryGetValue(state.Id, out var item) && item.State.Revision >= state.Revision)
-            {
-                return;
-            }
+            if (_objects.TryGetValue(state.Id, out var item) && item.State.Revision >= state.Revision) return;
 
             bool created = item == null;
             if (created)
             {
-                if (_objects.Count >= SandboxMessage.MaxObjects) return;
-
-                GameObject root = _world.Assets.Create(state.Asset, true);
-                if (!root)
-                {
-                    if (_pending.Count < SandboxMessage.MaxObjects)
-                    {
-                        _pending[state.Id] = state;
-                    }
-
-                    _world.SetStatus("Waiting for prop: " + state.Asset);
-
-                    return;
-                }
-
-                _pending.Remove(state.Id);
-                _objects[state.Id] = item = new Placed
-                {
-                    Root = root,
-                    Effects = new PropEffects(root),
-                    BaseScale = root.transform.localScale
-                };
-
-                root.name = "Build_" + state.Id;
-
-                List<(Material, Texture)> materials = new();
-                foreach (Renderer renderer in root.GetComponentsInChildren<Renderer>())
-                {
-                    Material[] copies = renderer.sharedMaterials.Where(material => material).Select(material => new Material(material)).ToArray();
-                    foreach (Material material in copies)
-                    {
-                        materials.Add((material, material.mainTexture));
-                    }
-
-                    renderer.sharedMaterials = new Il2CppInterop.Runtime.InteropTypes.Arrays.Il2CppReferenceArray<Material>(copies);
-                }
-
-                item.Materials = materials.ToArray();
+                item = Spawn(state);
+                if (item == null) return;
             }
 
             item.Motion.Clear();
             item.State = state;
             item.Effects.Apply(state.Effects);
-            item.Root.transform.SetPositionAndRotation(
-                SandboxWorld.Vector(state.Position),
-                SandboxWorld.Quaternion(state.Rotation));
+            item.Root.transform.SetPositionAndRotation(SandboxWorld.Vector(state.Position), SandboxWorld.Quaternion(state.Rotation));
             item.Root.transform.localScale = Vector3.Scale(item.BaseScale, SandboxWorld.Vector(state.Scale));
             item.Position = item.Root.transform.position;
             item.Rotation = item.Root.transform.rotation;
 
             ColorUtility.TryParseHtmlString(state.Color, out Color color);
-
             foreach (var pair in item.Materials)
             {
                 pair.Material.color = color;
@@ -269,28 +203,80 @@ namespace NullServers.Sandbox
             }
 
             item.AppliedTexture = null;
+            ApplyPhysics(item, state);
 
+            if (created && state.Owner == _world.LocalId)
+            {
+                _undo.Add(state.Id);
+            }
+        }
+
+        // An object whose asset is not loaded yet waits in the pending list until the asset appears.
+        private Placed Spawn(BuildingObject state)
+        {
+            if (_objects.Count >= SandboxMessage.MaxObjects) return null;
+
+            GameObject root = _world.Assets.Create(state.Asset, true);
+            if (!root)
+            {
+                if (_pending.Count < SandboxMessage.MaxObjects)
+                {
+                    _pending[state.Id] = state;
+                }
+
+                _world.SetStatus("Waiting for prop: " + state.Asset);
+                return null;
+            }
+
+            _pending.Remove(state.Id);
+            root.name = "Build_" + state.Id;
+
+            Placed item = new()
+            {
+                Root = root,
+                Effects = new PropEffects(root),
+                BaseScale = root.transform.localScale,
+                Materials = CopyMaterials(root)
+            };
+
+            _objects[state.Id] = item;
+            return item;
+        }
+
+        // Every object gets its own material copies, so its color and texture do not change other objects.
+        private static (Material Material, Texture Texture)[] CopyMaterials(GameObject root)
+        {
+            List<(Material, Texture)> materials = new();
+            foreach (Renderer renderer in root.GetComponentsInChildren<Renderer>())
+            {
+                Material[] copies = renderer.sharedMaterials.Where(material => material).Select(material => new Material(material)).ToArray();
+                foreach (Material material in copies)
+                {
+                    materials.Add((material, material.mainTexture));
+                }
+
+                renderer.sharedMaterials = new Il2CppInterop.Runtime.InteropTypes.Arrays.Il2CppReferenceArray<Material>(copies);
+            }
+
+            return materials.ToArray();
+        }
+
+        // Only the host simulates dynamic objects; clients keep them kinematic and follow the host's poses.
+        private void ApplyPhysics(Placed item, BuildingObject state)
+        {
             Rigidbody body = item.Root.GetComponent(Il2CppType.Of<Rigidbody>())?.Cast<Rigidbody>();
             if (state.Dynamic && !body)
             {
                 body = item.Root.AddComponent(Il2CppType.Of<Rigidbody>()).Cast<Rigidbody>();
             }
 
-            if (body)
-            {
-                body.isKinematic = !_world.IsHost || !state.Dynamic;
-                body.useGravity = state.Dynamic;
-                body.interpolation = RigidbodyInterpolation.Interpolate;
-                body.mass = Mathf.Clamp(
-                    item.Root.transform.localScale.x * item.Root.transform.localScale.y * item.Root.transform.localScale.z,
-                    0.1f,
-                    100f);
-            }
+            if (!body) return;
 
-            if (created && state.Owner == _world.LocalId)
-            {
-                _undo.Add(state.Id);
-            }
+            Vector3 scale = item.Root.transform.localScale;
+            body.isKinematic = !_world.IsHost || !state.Dynamic;
+            body.useGravity = state.Dynamic;
+            body.interpolation = RigidbodyInterpolation.Interpolate;
+            body.mass = Mathf.Clamp(scale.x * scale.y * scale.z, 0.1f, 100f);
         }
 
         internal void Remove(int id)
@@ -608,7 +594,7 @@ namespace NullServers.Sandbox
                     return "An object changed or is not yours. Select the group again.";
             }
 
-            var ids = items.Select(item => item.Id).ToHashSet();
+            HashSet<int> ids = items.Select(item => item.Id).ToHashSet();
             if (message.Kind == SandboxKind.BatchEdit && _objects.Values.Count(item => item.State.Dynamic && !ids.Contains(item.State.Id)) + items.Count(item => item.Dynamic) > 64)
             {
                 return "This room already has 64 objects with active physics.";
@@ -688,7 +674,7 @@ namespace NullServers.Sandbox
 
             float now = Time.unscaledTime;
 
-            if (Input.GetKeyDown(KeyCode.Escape))
+            if (Input.GetKeyDown(KeyCode.BackQuote))
             {
                 Stop();
                 return;
@@ -850,117 +836,19 @@ namespace NullServers.Sandbox
                 _localController = _world.LocalMovement?.transform;
             }
 
-            foreach (BuildingObject state in _pending.Values.ToArray())
-            {
-                if (_world.Assets.Find(state.Asset) != null)
-                {
-                    Apply(state);
-                }
-            }
-
-            foreach (Placed item in _objects.Values)
-            {
-                if (!item.Root) continue;
-
-                if (!string.IsNullOrEmpty(item.State.Texture))
-                {
-                    Texture2D texture = _world.Assets.Textures.Get(item.State.Texture);
-                    if (texture && texture != item.AppliedTexture)
-                    {
-                        foreach (var pair in item.Materials)
-                        {
-                            pair.Material.mainTexture = texture;
-                        }
-
-                        item.AppliedTexture = texture;
-                    }
-                }
-
-                if (!_world.IsHost && item.State.Dynamic)
-                {
-                    if (item.Motion.Sample(_world.Physics.RenderTime, out var pose))
-                    {
-                        item.Root.transform.SetPositionAndRotation(
-                            new Vector3(pose.Position.X, pose.Position.Y, pose.Position.Z),
-                            new Quaternion(pose.Rotation.X, pose.Rotation.Y, pose.Rotation.Z, pose.Rotation.W));
-                    }
-                }
-            }
+            ApplyPendingObjects();
+            UpdatePlacedObjects();
 
             if (_world.IsHost && Time.unscaledTime >= _nextPhysics)
             {
                 _nextPhysics = Time.unscaledTime + 0.05f;
-
-                foreach (Placed item in _objects.Values.Where(value => value.State.Dynamic && value.Root).ToArray())
-                {
-                    Transform transform = item.Root.transform;
-                    Vector3 position = transform.position;
-                    Quaternion rotation = transform.rotation;
-
-                    if (!SandboxWorld.Point(position).Valid() || position.y < -5000)
-                    {
-                        Remove(item.State.Id);
-
-                        _world.Send(_world.Message(SandboxKind.Delete) with
-                        {
-                            Id = item.State.Id
-                        });
-
-                        continue;
-                    }
-
-                    item.State = item.State with
-                    {
-                        Position = SandboxWorld.Point(position),
-                        Rotation = SandboxWorld.Rotation(rotation)
-                    };
-
-                    _world.Physics.Capture(item.State.Id, 255, position, rotation);
-                }
+                CaptureDynamicObjects();
             }
 
             if (_selecting)
             {
-                if (_selection.Count > 0)
-                {
-                    var roots = _selection.Select(Root).Where(root => root).ToArray();
-                    if (roots.Length > 0)
-                    {
-                        Bounds group = SandboxAssets.BoundsOf(roots[0]);
-                        foreach (GameObject root in roots.Skip(1))
-                        {
-                            group.Encapsulate(SandboxAssets.BoundsOf(root));
-                        }
-
-                        Frame(group, new Color(0.15f, 0.8f, 1f));
-                    }
-
-                    HandleInput();
-                    return;
-                }
-
-                Camera view = Camera.main;
-
-                if (_outline)
-                {
-                    _outline.SetActive(false);
-                }
-
-                if (view && Surface(new Ray(view.transform.position, view.transform.forward), 120f, out var hovered))
-                {
-                    Placed item = PlacedAt(hovered.transform);
-
-                    if (item != null)
-                    {
-                        Frame(
-                            SandboxAssets.BoundsOf(item.Root),
-                            SandboxMessage.CanEdit(item.State.Owner, _world.LocalId, _world.IsAdmin) ?
-                            new Color(0.2f, 0.85f, 1f) : new Color(1f, 0.35f, 0.25f));
-                    }
-                }
-
+                HighlightSelection();
                 HandleInput();
-
                 return;
             }
 
@@ -979,6 +867,121 @@ namespace NullServers.Sandbox
             Camera camera = Camera.main;
             if (!camera) return;
 
+            UpdatePreview(camera);
+
+            if (InputAllowed() && (Input.GetKeyDown(KeyCode.Q) || Input.GetKeyDown(KeyCode.E)))
+            {
+                RotateDraft();
+            }
+
+            HandleInput();
+        }
+
+        // Objects whose asset was not loaded yet when they arrived are placed as soon as the asset appears.
+        private void ApplyPendingObjects()
+        {
+            foreach (BuildingObject state in _pending.Values.ToArray())
+            {
+                if (_world.Assets.Find(state.Asset) != null)
+                {
+                    Apply(state);
+                }
+            }
+        }
+
+        private void UpdatePlacedObjects()
+        {
+            foreach (Placed item in _objects.Values)
+            {
+                if (!item.Root) continue;
+
+                ApplyTexture(item);
+
+                bool followsHost = !_world.IsHost && item.State.Dynamic && _world.Hands.Holding != item.State.Id;
+                if (followsHost && item.Motion.Sample(_world.Physics.RenderTime, out var pose))
+                {
+                    Vector3 position = new(pose.Position.X, pose.Position.Y, pose.Position.Z);
+                    Quaternion rotation = new(pose.Rotation.X, pose.Rotation.Y, pose.Rotation.Z, pose.Rotation.W);
+                    item.Root.transform.SetPositionAndRotation(position, rotation);
+                }
+            }
+        }
+
+        private void ApplyTexture(Placed item)
+        {
+            if (string.IsNullOrEmpty(item.State.Texture)) return;
+
+            Texture2D texture = _world.Assets.Textures.Get(item.State.Texture);
+            if (!texture || texture == item.AppliedTexture) return;
+
+            foreach (var pair in item.Materials)
+            {
+                pair.Material.mainTexture = texture;
+            }
+
+            item.AppliedTexture = texture;
+        }
+
+        // The host records where its physics moved every dynamic object, and deletes objects that fell out of the world.
+        private void CaptureDynamicObjects()
+        {
+            foreach (Placed item in _objects.Values.Where(value => value.State.Dynamic && value.Root).ToArray())
+            {
+                Transform transform = item.Root.transform;
+                Vector3 position = transform.position;
+                Quaternion rotation = transform.rotation;
+
+                if (!SandboxWorld.Point(position).Valid() || position.y < -5000)
+                {
+                    Remove(item.State.Id);
+                    _world.Send(_world.Message(SandboxKind.Delete) with { Id = item.State.Id });
+                    continue;
+                }
+
+                item.State = item.State with
+                {
+                    Position = SandboxWorld.Point(position),
+                    Rotation = SandboxWorld.Rotation(rotation)
+                };
+
+                _world.Physics.Capture(item.State.Id, 255, position, rotation);
+            }
+        }
+
+        private void HighlightSelection()
+        {
+            if (_selection.Count > 0)
+            {
+                GameObject[] roots = _selection.Select(Root).Where(root => root).ToArray();
+                if (roots.Length == 0) return;
+
+                Bounds group = SandboxAssets.BoundsOf(roots[0]);
+                foreach (GameObject root in roots.Skip(1))
+                {
+                    group.Encapsulate(SandboxAssets.BoundsOf(root));
+                }
+
+                Frame(group, new Color(0.15f, 0.8f, 1f));
+                return;
+            }
+
+            if (_outline)
+            {
+                _outline.SetActive(false);
+            }
+
+            Camera view = Camera.main;
+            if (!view || !Surface(new Ray(view.transform.position, view.transform.forward), 120f, out var hovered)) return;
+
+            Placed item = PlacedAt(hovered.transform);
+            if (item == null) return;
+
+            bool editable = SandboxMessage.CanEdit(item.State.Owner, _world.LocalId, _world.IsAdmin);
+            Frame(SandboxAssets.BoundsOf(item.Root), editable ? new Color(0.2f, 0.85f, 1f) : new Color(1f, 0.35f, 0.25f));
+        }
+
+        private void UpdatePreview(Camera camera)
+        {
             bool inWorld = Cursor.lockState == CursorLockMode.Locked;
             _hasSurface = _editing;
 
@@ -987,11 +990,10 @@ namespace NullServers.Sandbox
                 PositionPreview(camera);
             }
 
-            _ghost.transform.SetPositionAndRotation(
-                SandboxWorld.Vector(_draft.Position),
-                SandboxWorld.Quaternion(_draft.Rotation));
+            _ghost.transform.SetPositionAndRotation(SandboxWorld.Vector(_draft.Position), SandboxWorld.Quaternion(_draft.Rotation));
             _ghost.transform.localScale = Vector3.Scale(_ghostBaseScale, SandboxWorld.Vector(_draft.Scale));
 
+            // A preview that would be placed around the camera itself is shown as invalid.
             Bounds previewBounds = SandboxAssets.BoundsOf(_ghost);
             if (!_editing && previewBounds.Contains(camera.transform.position))
             {
@@ -1011,34 +1013,31 @@ namespace NullServers.Sandbox
                 Frame(previewBounds, new Color(0.15f, 0.75f, 1f));
             }
 
-            ColorUtility.TryParseHtmlString(_draft.Color, out var tint);
+            ColorUtility.TryParseHtmlString(_draft.Color, out Color tint);
             _ghostMaterial.color = _hasSurface ? new Color(tint.r, tint.g, tint.b, 0.35f) : new Color(1f, 0.2f, 0.2f, 0.35f);
 
             if (!string.IsNullOrEmpty(_draft.Texture))
             {
                 _ghostMaterial.mainTexture = _world.Assets.Textures.Get(_draft.Texture);
             }
+        }
 
-            if (!InputAllowed())
+        // Q and E turn the preview by 15 degrees: around Y by default, X with Shift, Z with Alt.
+        private void RotateDraft()
+        {
+            Vector3 axis = Vector3.up;
+            if (Input.GetKey(KeyCode.LeftAlt))
             {
-                HandleInput();
-                return;
+                axis = Vector3.forward;
+            }
+            else if (Input.GetKey(KeyCode.LeftShift))
+            {
+                axis = Vector3.right;
             }
 
-            if (Input.GetKeyDown(KeyCode.Q) || Input.GetKeyDown(KeyCode.E))
-            {
-                Vector3 axis = Input.GetKey(KeyCode.LeftAlt) ?
-                    Vector3.forward :
-                    Input.GetKey(KeyCode.LeftShift) ? Vector3.right : Vector3.up;
-
-                _draft = _draft with
-                {
-                    Rotation = SandboxWorld.Rotation(SandboxWorld.Quaternion(_draft.Rotation) *
-                    Quaternion.AngleAxis(Input.GetKeyDown(KeyCode.Q) ? -15 : 15, axis))
-                };
-            }
-
-            HandleInput();
+            float angle = Input.GetKeyDown(KeyCode.Q) ? -15f : 15f;
+            Quaternion rotation = SandboxWorld.Quaternion(_draft.Rotation) * Quaternion.AngleAxis(angle, axis);
+            _draft = _draft with { Rotation = SandboxWorld.Rotation(rotation) };
         }
 
         private void PositionPreview(Camera camera)

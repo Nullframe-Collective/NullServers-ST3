@@ -181,7 +181,7 @@ namespace NullServers.Customization
             if (changed)
             {
                 _profiles.SendHats(Packet(HatPacketKind.Snapshot, new HatEntry(player, hats)));
-                _logger.Msg($"Hat slots synchronized. Client: {player}.");
+                _logger.Debug($"Hat slots synchronized. Client: {player}.");
             }
         }
 

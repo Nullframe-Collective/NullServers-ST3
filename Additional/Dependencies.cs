@@ -20,7 +20,8 @@ namespace NullServers.Additional
         Disabled,
         Unavailable,
         Content,
-        Room
+        Room,
+        Download
     }
 
     internal sealed record AddonNotice(
@@ -35,6 +36,7 @@ namespace NullServers.Additional
             AddonNoticeKind.Disabled => "ADDONS DISABLED",
             AddonNoticeKind.Unavailable => "ADDON INITIALIZATION ERROR",
             AddonNoticeKind.Room => "ROOM REQUIREMENTS CHANGED",
+            AddonNoticeKind.Download => "DOWNLOAD FAILED",
             _ => "REQUIRED ADDONS"
         };
 
@@ -48,15 +50,21 @@ namespace NullServers.Additional
         internal const string Maps = "CustomMapsFramework";
         internal const string Modes = "CustomGameModesFramework";
         internal const string Customization = "CustomPlayerCustomization";
+        internal const string Voice = "VoiceChat";
         internal const string DownloadUrl = "https://discord.gg/CjWXxyS2U4";
-        internal static readonly string[] Official = [Weapons, Customization, NPCs, Modes, Maps];
+        internal static readonly string[] Official = [Weapons, Customization, NPCs, Modes, Maps, Voice];
+
+        // Optional addons are listed in ADDONS, but a room never requires them.
+        internal static readonly string[] Optional = [Voice];
+
         internal static readonly AddonRequirement[] Available =
         [
-            new(Weapons, "1.3.0"),
-            new(Customization, "1.3.0"),
-            new(NPCs, "1.1.0"),
+            new(Weapons, "1.3.7"),
+            new(Customization, "1.3.3"),
+            new(NPCs, "1.1.1"),
             new(Modes, "1.1.4"),
-            new(Maps, "1.1.1")
+            new(Maps, "1.1.1"),
+            new(Voice, "0.1.0")
         ];
 
         internal static AddonRequirement[] Missing(IEnumerable<AddonRequirement> required, IEnumerable<AddonRequirement> installed)
@@ -94,6 +102,7 @@ namespace NullServers.Additional
                     }
 
                     AddonRequirement addon = new(property.Name, property.Value.GetString());
+                    if (Optional.Contains(addon.Id)) continue;
 
                     if (!addon.Valid || result.Count >= Official.Length || result.Any(existing => existing.Id == addon.Id))
                     {

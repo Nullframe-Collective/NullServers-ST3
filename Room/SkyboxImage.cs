@@ -16,95 +16,25 @@ namespace NullServers.Room
         private Texture2D _source;
         internal string Error { get; private set; }
 
+        // Returns the sky material for the image at the URL, or null while it downloads or when it cannot be used.
         internal Material Update(string url, float exposure)
         {
             if (_url != url)
             {
-                Dispose();
-                _url = url;
-                Error = null;
-
-                if (!string.IsNullOrEmpty(url))
-                {
-                    _cancellation = new CancellationTokenSource();
-                    _download = PublicImage.Download(url, _cancellation.Token);
-                    _download.ContinueWith(task => { _ = task.Exception; }, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
-                }
+                Start(url);
             }
 
-            if (string.IsNullOrEmpty(url))
-            {
-                return null;
-            }
+            if (string.IsNullOrEmpty(url)) return null;
 
             if (_download?.IsCompleted == true)
             {
-                try
-                {
-                    byte[] bytes = _download.GetAwaiter().GetResult();
-                    _texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
-
-                    if (!ImageConversion.LoadImage(_texture, bytes, false))
-                    {
-                        Object.Destroy(_texture);
-                        _texture = null;
-                        Error = "The sky URL did not return a supported image.";
-                    }
-                }
-                catch (Exception exception)
-                {
-                    if (_texture)
-                    {
-                        Object.Destroy(_texture);
-                    }
-
-                    _texture = null;
-                    Error = Describe("Cannot load sky image", exception);
-                }
-
-                _download = null;
+                FinishDownload();
             }
 
             Texture2D texture = _texture;
-            if (!texture)
-            {
-                return null;
-            }
+            if (!texture) return null;
 
-            if (_source != texture)
-            {
-                ReleaseMaterial();
-                _source = texture;
-
-                try
-                {
-                    Shader panoramic = Shader.Find("Skybox/Panoramic");
-                    if (panoramic)
-                    {
-                        _material = new Material(panoramic);
-                        _material.SetTexture("_MainTex", texture);
-                    }
-                    else
-                    {
-                        Shader shader = Shader.Find("Skybox/6 Sided");
-                        if (!shader)
-                        {
-                            Error = "This game build has no supported image skybox shader.";
-                            return null;
-                        }
-
-                        _material = new Material(shader);
-                        BuildCubeFaces(texture);
-                    }
-                }
-                catch (Exception exception)
-                {
-                    ReleaseMaterial();
-                    _source = texture;
-                    Error = Describe("Cannot prepare sky image", exception);
-                    return null;
-                }
-            }
+            if (_source != texture && !PrepareMaterial(texture)) return null;
 
             if (_material && _material.HasProperty("_Exposure"))
             {
@@ -112,6 +42,83 @@ namespace NullServers.Room
             }
 
             return _material;
+        }
+
+        private void Start(string url)
+        {
+            Dispose();
+            _url = url;
+            Error = null;
+
+            if (string.IsNullOrEmpty(url)) return;
+
+            _cancellation = new CancellationTokenSource();
+            _download = PublicImage.Download(url, _cancellation.Token);
+            _download.ContinueWith(task => { _ = task.Exception; }, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
+        }
+
+        private void FinishDownload()
+        {
+            try
+            {
+                byte[] bytes = _download.GetAwaiter().GetResult();
+                _texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+
+                if (!ImageConversion.LoadImage(_texture, bytes, false))
+                {
+                    Object.Destroy(_texture);
+                    _texture = null;
+                    Error = "The sky URL did not return a supported image.";
+                }
+            }
+            catch (Exception exception)
+            {
+                if (_texture)
+                {
+                    Object.Destroy(_texture);
+                }
+
+                _texture = null;
+                Error = Describe("Cannot load sky image", exception);
+            }
+
+            _download = null;
+        }
+
+        // The panoramic shader takes the image as it is. Without it the image is cut into six cube faces.
+        private bool PrepareMaterial(Texture2D texture)
+        {
+            ReleaseMaterial();
+            _source = texture;
+
+            try
+            {
+                Shader panoramic = Shader.Find("Skybox/Panoramic");
+                if (panoramic)
+                {
+                    _material = new Material(panoramic);
+                    _material.SetTexture("_MainTex", texture);
+                    return true;
+                }
+
+                Shader shader = Shader.Find("Skybox/6 Sided");
+                if (!shader)
+                {
+                    Error = "This game build has no supported image skybox shader.";
+                    return false;
+                }
+
+                _material = new Material(shader);
+                BuildCubeFaces(texture);
+                return true;
+            }
+            catch (Exception exception)
+            {
+                ReleaseMaterial();
+                _source = texture;
+                Error = Describe("Cannot prepare sky image", exception);
+                return false;
+            }
         }
 
         private void BuildCubeFaces(Texture2D panorama)

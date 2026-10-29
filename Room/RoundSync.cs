@@ -1,5 +1,4 @@
-﻿using HarmonyLib;
-using Il2Cpp;
+﻿using Il2Cpp;
 using Il2CppFishNet.Managing;
 using Il2CppFishNet.Managing.Scened;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
@@ -9,7 +8,6 @@ using NullServers.Players;
 using System.Text;
 using System.Text.Json;
 using UnityEngine;
-using NetworkSceneManager = Il2CppFishNet.Managing.Scened.SceneManager;
 using SceneManager = UnityEngine.SceneManagement.SceneManager;
 
 namespace NullServers.Room
@@ -37,7 +35,7 @@ namespace NullServers.Room
         private RoomMultiplayerMenu _queuedSpawnMenu;
         private string _queuedSpawnTeam;
 
-        internal RoundSync(HarmonyLib.Harmony harmony, RelaySession session, PlayerProfiles profiles, MelonLogger.Instance logger)
+        internal RoundSync(RelaySession session, PlayerProfiles profiles, MelonLogger.Instance logger)
         {
             _instance = this;
             _session = session;
@@ -45,31 +43,9 @@ namespace NullServers.Room
             _logger = logger;
 
             profiles.RoundSignalReceivedFromServer += OnServerSignal;
-
-            harmony.Patch(
-                AccessTools.Method(
-                    typeof(NetworkSceneManager),
-                    nameof(NetworkSceneManager.QueueOperation),
-                    [typeof(LoadQueueData)]),
-                prefix: new HarmonyMethod(typeof(RoundSync), nameof(BeforeSceneLoad)));
-
-            harmony.Patch(
-                AccessTools.Method(
-                    typeof(DefaultSceneProcessor),
-                    nameof(DefaultSceneProcessor.UnloadStart),
-                    [typeof(UnloadQueueData)]),
-                prefix: new HarmonyMethod(typeof(RoundSync), nameof(BeforeSceneUnload)));
-
-            harmony.Patch(
-                AccessTools.Method(typeof(RoomMultiplayerMenu), nameof(RoomMultiplayerMenu.Start)),
-                prefix: new HarmonyMethod(typeof(RoundSync), nameof(BeforeRoomStart)));
-
-            harmony.Patch(
-                AccessTools.Method(typeof(RoomMultiplayerMenu), nameof(RoomMultiplayerMenu.SpawnPlayer)),
-                prefix: new HarmonyMethod(typeof(RoundSync), nameof(BeforePlayerSpawn)));
         }
 
-        private static bool BeforeSceneLoad(LoadQueueData data)
+        internal static bool BeforeSceneLoad(LoadQueueData data)
         {
             RoundSync instance = _instance;
             NetBootstrap bootstrap = NetBootstrap.Current;
@@ -89,7 +65,7 @@ namespace NullServers.Room
             return !instance._roundRejected;
         }
 
-        private static void BeforeSceneUnload(UnloadQueueData queueData)
+        internal static void BeforeSceneUnload(UnloadQueueData queueData)
         {
             if (!_instance.Begin(queueData?.SceneUnloadData?.Params?.ClientParams))
             {
@@ -127,7 +103,7 @@ namespace NullServers.Room
 
             try
             {
-                using var document = JsonDocument.Parse(parts[2]);
+                using JsonDocument document = JsonDocument.Parse(parts[2]);
                 JsonElement properties = document.RootElement;
                 if (properties.ValueKind != JsonValueKind.Object ||
                     !properties.TryGetProperty("Version", out var version) ||
@@ -183,12 +159,12 @@ namespace NullServers.Room
             bootstrap._MADNGLFHLMO_k__BackingField = false;
             ApplyProperties(parts[2]);
 
-            _logger.Msg($"Client round transition: {_scene}; revision {_revision}.");
+            _logger.Debug($"Client round transition: {_scene}; revision {_revision}.");
 
             return true;
         }
 
-        private static bool BeforeRoomStart(RoomMultiplayerMenu __instance)
+        internal static bool BeforeRoomStart(RoomMultiplayerMenu __instance)
         {
             RoundSync instance = _instance;
             if (instance._revision == null ||
@@ -211,7 +187,7 @@ namespace NullServers.Room
             return true;
         }
 
-        private static bool BeforePlayerSpawn(RoomMultiplayerMenu __instance, string teamName)
+        internal static bool BeforePlayerSpawn(RoomMultiplayerMenu __instance, string teamName)
         {
             RoundSync instance = _instance;
 
@@ -270,19 +246,14 @@ namespace NullServers.Room
             }
         }
 
+        // A client tells the host when the new round's room object is ready, and asks for it again if it never arrived.
         private void UpdateClient()
         {
             if (_revision == null) return;
 
             NetBootstrap bootstrap = NetBootstrap.Current;
             NetworkManager manager = bootstrap ? bootstrap.Network : null;
-            if (!_session.IsNullFrame ||
-                _session.IsSwitching ||
-                !_session.Relay ||
-                _session.Relay.CurrentRoom?.Id != _roomId ||
-                !manager ||
-                !manager.ClientManager.Started ||
-                manager.ServerManager.Started)
+            if (!StillInRound(manager))
             {
                 Clear();
                 return;
@@ -291,92 +262,20 @@ namespace NullServers.Room
             RoomMultiplayerMenu menu = RoomMultiplayerMenu.Current;
             if (Time.unscaledTime > _deadline)
             {
-                bool hasMenu = menu;
-
-                _logger.Warning(
-                    $"Client round initialization timed out: {_scene}; menu={hasMenu}; " +
-                    $"active={hasMenu && menu.gameObject.activeInHierarchy}; client={hasMenu && menu.IsClientInitialized}; " +
-                    $"initialized={hasMenu && menu.IsInitialized}; sceneId={(hasMenu ? menu.NetworkObject.SceneId : 0)}; " +
-                    $"objectId={(hasMenu ? menu.NetworkObject.ObjectId : -1)}; " +
-                    $"registered={hasMenu &&
-                    manager.ClientManager.Objects.SceneObjects.ContainsKey(menu.NetworkObject.SceneId)}."
-                );
-
+                LogTimeout(menu, manager);
                 Clear();
-
                 return;
             }
 
             UnityEngine.SceneManagement.Scene scene = SceneManager.GetActiveScene();
-            if (manager.SceneManager.IteratingQueue || scene.name != _scene || scene.handle == _previousSceneHandle)
-            {
-                return;
-            }
+            if (manager.SceneManager.IteratingQueue || scene.name != _scene || scene.handle == _previousSceneHandle) return;
 
-            bool ready = false;
-            int objectId = -1;
-            ulong sceneId = 0;
-            bool registered = false;
-
-            if (menu && menu.gameObject.scene == scene)
-            {
-                Il2CppFishNet.Object.NetworkObject networkObject = menu.NetworkObject;
-
-                sceneId = networkObject.SceneId;
-                registered = manager.ClientManager.Objects.SceneObjects.TryGetValue(sceneId, out var sceneObject) &&
-                    sceneObject == networkObject;
-
-                if (menu.IsClientInitialized &&
-                    manager.ClientManager.Objects.Spawned.TryGetValue(networkObject.ObjectId, out var spawned) &&
-                    spawned == networkObject)
-                {
-                    objectId = networkObject.ObjectId;
-                    if (!menu.gameObject.activeSelf)
-                    {
-                        menu.gameObject.SetActive(true);
-                        _logger.Msg($"Reactivated initialized room object {objectId}.");
-                    }
-
-                    if (_deferredStart == menu && menu.gameObject.activeInHierarchy)
-                    {
-                        _deferredStart = null;
-                        menu.Start();
-                    }
-
-                    ready = menu.gameObject.activeInHierarchy && menu.IsInitialized && PlayerInfo.Local;
-                }
-            }
+            bool ready = CheckRoomObject(menu, scene, manager, out int objectId, out ulong sceneId, out bool registered);
 
             if (_probeObjectId >= 0)
             {
                 if (Time.frameCount < _probeFrame) return;
-
-                if (sceneId != _probeSceneId && !_reportedSceneMismatch)
-                {
-                    _reportedSceneMismatch = true;
-                    _logger.Warning($"Room scene object mismatch: client sceneId={sceneId}; server sceneId={_probeSceneId}.");
-                }
-
-                if (objectId < 0 && registered && sceneId == _probeSceneId)
-                {
-                    _logger.Msg($"Requesting room spawn: object {_probeObjectId}; sceneId {sceneId}; registered={registered}.");
-                    _profiles.SendRoundSignal(new RoundSignal(
-                            1,
-                            _roomId,
-                            _revision,
-                            _scene,
-                            false,
-                            _probeObjectId,
-                            missing: true,
-                            sceneId: sceneId));
-
-                    _nextRequest = Time.unscaledTime + 2f;
-                    _probeObjectId = -1;
-
-                    return;
-                }
-
-                _probeObjectId = -1;
+                if (AnswerProbe(objectId, sceneId, registered)) return;
             }
 
             if ((!ready || _readySent) && Time.unscaledTime < _nextRequest) return;
@@ -387,8 +286,83 @@ namespace NullServers.Room
             if (ready && !_readySent)
             {
                 _readySent = true;
-                _logger.Msg($"Client round initialized: {_scene}; room object {objectId}; revision {_revision}.");
+                _logger.Debug($"Client round initialized: {_scene}; room object {objectId}; revision {_revision}.");
             }
+        }
+
+        private bool StillInRound(NetworkManager manager)
+        {
+            if (!_session.IsNullFrame || _session.IsSwitching || !_session.Relay) return false;
+            if (_session.Relay.CurrentRoom?.Id != _roomId) return false;
+            if (!manager || !manager.ClientManager.Started || manager.ServerManager.Started) return false;
+
+            return true;
+        }
+
+        private void LogTimeout(RoomMultiplayerMenu menu, NetworkManager manager)
+        {
+            bool hasMenu = menu;
+            bool registered = hasMenu && manager.ClientManager.Objects.SceneObjects.ContainsKey(menu.NetworkObject.SceneId);
+
+            _logger.Warning(
+                $"Client round initialization timed out: {_scene}; menu={hasMenu}; " +
+                $"active={hasMenu && menu.gameObject.activeInHierarchy}; client={hasMenu && menu.IsClientInitialized}; " +
+                $"initialized={hasMenu && menu.IsInitialized}; sceneId={(hasMenu ? menu.NetworkObject.SceneId : 0)}; " +
+                $"objectId={(hasMenu ? menu.NetworkObject.ObjectId : -1)}; registered={registered}.");
+        }
+
+        // The room object is ready once FishNet spawned it on this client, it is active and the local player exists.
+        private bool CheckRoomObject(RoomMultiplayerMenu menu, UnityEngine.SceneManagement.Scene scene, NetworkManager manager,
+            out int objectId, out ulong sceneId, out bool registered)
+        {
+            objectId = -1;
+            sceneId = 0;
+            registered = false;
+            if (!menu || menu.gameObject.scene != scene) return false;
+
+            Il2CppFishNet.Object.NetworkObject networkObject = menu.NetworkObject;
+            sceneId = networkObject.SceneId;
+            registered = manager.ClientManager.Objects.SceneObjects.TryGetValue(sceneId, out var sceneObject) && sceneObject == networkObject;
+
+            if (!menu.IsClientInitialized) return false;
+            if (!manager.ClientManager.Objects.Spawned.TryGetValue(networkObject.ObjectId, out var spawned) || spawned != networkObject) return false;
+
+            objectId = networkObject.ObjectId;
+            if (!menu.gameObject.activeSelf)
+            {
+                menu.gameObject.SetActive(true);
+                _logger.Debug($"Reactivated initialized room object {objectId}.");
+            }
+
+            if (_deferredStart == menu && menu.gameObject.activeInHierarchy)
+            {
+                _deferredStart = null;
+                menu.Start();
+            }
+
+            return menu.gameObject.activeInHierarchy && menu.IsInitialized && PlayerInfo.Local;
+        }
+
+        // When the host asks about a room object this client did not spawn, the client requests it once.
+        private bool AnswerProbe(int objectId, ulong sceneId, bool registered)
+        {
+            if (sceneId != _probeSceneId && !_reportedSceneMismatch)
+            {
+                _reportedSceneMismatch = true;
+                _logger.Debug($"Room scene object mismatch: client sceneId={sceneId}; server sceneId={_probeSceneId}.");
+            }
+
+            if (objectId >= 0 || !registered || sceneId != _probeSceneId)
+            {
+                _probeObjectId = -1;
+                return false;
+            }
+
+            _logger.Debug($"Requesting room spawn: object {_probeObjectId}; sceneId {sceneId}; registered={registered}.");
+            _profiles.SendRoundSignal(new RoundSignal(1, _roomId, _revision, _scene, false, _probeObjectId, missing: true, sceneId: sceneId));
+            _nextRequest = Time.unscaledTime + 2f;
+            _probeObjectId = -1;
+            return true;
         }
 
         private void OnServerSignal(RoundSignal signal)
