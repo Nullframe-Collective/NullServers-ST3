@@ -5,8 +5,9 @@ namespace NullServers.Additional
 {
     internal static class CommunityText
     {
-        internal const string BlacklistUrl = "https://raw.githubusercontent.com/Nullframe-Collective/Nullframe-Blacklist/refs/heads/main/Blacklist.txt";
+        internal const string BlacklistUrl = "https://raw.githubusercontent.com/Nullframe-Collective/Nullframe-Content/refs/heads/main/Blacklist.txt";
         internal const string UpdatesUrl = "https://pastebin.com/raw/Ph2u8AG8";
+        internal const string VersionUrl = "https://raw.githubusercontent.com/Nullframe-Collective/Nullframe-Content/refs/heads/main/NullServersVersion";
         private static readonly HttpClient Client = new(new HttpClientHandler
         {
             AllowAutoRedirect = false,
@@ -20,7 +21,7 @@ namespace NullServers.Additional
 
         internal static async Task<string> Download(string url, CancellationToken cancellation)
         {
-            if (url != BlacklistUrl && url != UpdatesUrl)
+            if (url != BlacklistUrl && url != UpdatesUrl && url != VersionUrl)
             {
                 throw new ArgumentException("Unknown community document.", nameof(url));
             }
@@ -30,7 +31,15 @@ namespace NullServers.Additional
             using HttpRequestMessage request = new(HttpMethod.Get, url);
             request.Headers.CacheControl = new() { NoCache = true };
             using HttpResponseMessage response = await Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
-            return await Read(response, url == BlacklistUrl ? 262144 : 65536, timeout.Token).ConfigureAwait(false);
+            int limit = url == BlacklistUrl ? 262144 : url == VersionUrl ? 256 : 65536;
+            return await Read(response, limit, timeout.Token).ConfigureAwait(false);
+        }
+
+        // The version file holds one version like "0.0.72". A missing or unreadable file never blocks anyone.
+        internal static bool IsOutdated(string current, string latest)
+        {
+            string line = latest?.Split('\n')[0].Trim();
+            return Version.TryParse(current, out Version installed) && Version.TryParse(line, out Version published) && installed < published;
         }
 
         internal static async Task<string> Read(HttpResponseMessage response, int limit, CancellationToken cancellation)

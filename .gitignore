@@ -6,3 +6,5 @@ obj/
 research/
 tests/
 dist/
+docs/
+FRAMEWORKS.md

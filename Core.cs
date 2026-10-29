@@ -1,4 +1,4 @@
-using MelonLoader;
+﻿using MelonLoader;
 using NullServers.Additional;
 using NullServers.Content;
 using NullServers.Customization;
@@ -10,7 +10,7 @@ using NullServers.Server;
 using NullServers.UI;
 using NullServers.Voice;
 
-[assembly: MelonInfo(typeof(NullServers.Core), "NullServers", "0.0.73", "NullFrame Collective", "https://github.com/Nullframe-Collective/NullServers-ST3")]
+[assembly: MelonInfo(typeof(NullServers.Core), "NullServers", "0.0.80", "NullFrame Collective", "https://github.com/Nullframe-Collective/NullServers-ST3")]
 [assembly: MelonOptionalDependencies("CustomWeaponsFramework", "CustomPlayerCustomization", "CustomNPCFramework", "CustomGameModesFramework", "CustomMapsFramework")]
 [assembly: MelonPriority(100)]
 [assembly: MelonGame("ZeoWorks", "Slendytubbies 3")]
@@ -53,7 +53,7 @@ namespace NullServers
             RoomOptions options = new();
             RelaySession session = new(options, LoggerInstance);
             _session = session;
-            _community = new CommunityMenu(session, LoggerInstance);
+            _community = new CommunityMenu(session, LoggerInstance, Info.Version);
             session.RefreshAddons();
             ColorPicker picker = new();
 

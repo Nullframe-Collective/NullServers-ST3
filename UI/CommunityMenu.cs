@@ -13,10 +13,11 @@ namespace NullServers.UI
 {
     internal sealed class CommunityMenu : IDisposable
     {
-        private sealed record Notice(string Title, string Text, string Button, Action Accepted);
+        private sealed record Notice(string Title, string Text, string Button, Action Accepted, string Back = null, Action Closed = null);
         private static CommunityMenu _instance;
         private readonly RelaySession _session;
         private readonly MelonLogger.Instance _logger;
+        private readonly string _version;
         private readonly CommunityPreferences _preferences = new(key => PlayerPrefs.GetString(key, ""), PlayerPrefs.SetString, PlayerPrefs.Save);
         private readonly List<Text> _blocks = new();
         private Canvas _canvas;
@@ -33,11 +34,12 @@ namespace NullServers.UI
 
         internal bool Visible => _root;
 
-        internal CommunityMenu(RelaySession session, MelonLogger.Instance logger)
+        internal CommunityMenu(RelaySession session, MelonLogger.Instance logger, string version)
         {
             _instance = this;
             _session = session;
             _logger = logger;
+            _version = version;
             session.AccessDenied += Denied;
         }
 
@@ -56,13 +58,14 @@ namespace NullServers.UI
             MelonCoroutines.Start(Check(++_generation));
         }
 
-        // Shows the rules (until accepted once), waits for the global blacklist and the update log,
+        // Shows the rules (until accepted once), waits for the global blacklist, the latest version and the update log,
         // then lets the player in or explains why they cannot play.
         private IEnumerator Check(int generation)
         {
             _session.Blacklist.Refresh();
             _updatesCancellation = new CancellationTokenSource();
             Task<string> updates = CommunityText.Download(CommunityText.UpdatesUrl, _updatesCancellation.Token);
+            Task<string> latest = CommunityText.Download(CommunityText.VersionUrl, _updatesCancellation.Token);
             bool rulesAccepted = _preferences.Next(null) != CommunityPrompt.Rules;
             void Waiting() => Show(new Notice("NullFrame Servers", "Checking community access and looking for updates...", "Cancel", Cancel));
 
@@ -80,11 +83,12 @@ namespace NullServers.UI
                 Waiting();
             }
 
-            while (_session.Blacklist.Updating || !updates.IsCompleted || !rulesAccepted)
+            while (_session.Blacklist.Updating || !updates.IsCompleted || !latest.IsCompleted || !rulesAccepted)
             {
                 if (generation != _generation)
                 {
                     _ = updates.ContinueWith(task => { _ = task.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
+                    _ = latest.ContinueWith(task => { _ = task.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
                     yield break;
                 }
 
@@ -95,10 +99,10 @@ namespace NullServers.UI
 
             _updatesCancellation.Dispose();
             _updatesCancellation = null;
-            Complete(updates);
+            Complete(updates, latest);
         }
 
-        private void Complete(Task<string> updates)
+        private void Complete(Task<string> updates, Task<string> latest)
         {
             if (!_session.Blacklist.Ready)
             {
@@ -112,7 +116,14 @@ namespace NullServers.UI
                 return;
             }
 
-            string text = ReadUpdates(updates);
+            string published = Read(latest, "Latest NullServers version");
+            if (CommunityText.IsOutdated(_version, published))
+            {
+                Outdated(published.Split('\n')[0].Trim());
+                return;
+            }
+
+            string text = Read(updates, "Community update log");
             if (_preferences.Next(text) == CommunityPrompt.Updates)
             {
                 Show(new Notice("Update Log", text, "OK", () =>
@@ -127,17 +138,47 @@ namespace NullServers.UI
             }
         }
 
-        // A missing update log never blocks the player.
-        private string ReadUpdates(Task<string> updates)
+        // A missing update log or version file never blocks the player.
+        private string Read(Task<string> download, string name)
         {
             try
             {
-                return updates.GetAwaiter().GetResult();
+                return download.GetAwaiter().GetResult();
             }
             catch (Exception exception)
             {
-                _logger.Warning("Community update log could not be loaded: " + exception.Message);
+                _logger.Warning(name + " could not be loaded: " + exception.Message);
                 return null;
+            }
+        }
+
+        // An outdated version cannot enter NullFrame Servers. Download opens the Discord server with the new version.
+        private void Outdated(string latest)
+        {
+            _session.CommunityAccepted = false;
+            _entering = false;
+            _continue = null;
+            _logger.Warning($"NullServers {_version} is outdated; the current version is {latest}.");
+
+            string text = $"Your NullServers version ({_version}) is too old, so you cannot join or create NullFrame lobbies.\n\n" +
+                $"The current version is {latest}. Download it from the NullFrame Collective Discord server, replace NullServers.dll " +
+                "in the game's Mods folder and restart the game.";
+
+            Show(new Notice("Outdated Version", text, "Download", () =>
+            {
+                Application.OpenURL(Dependencies.DownloadUrl);
+                ReturnToMenu();
+            }, "Back", ReturnToMenu));
+        }
+
+        private void ReturnToMenu()
+        {
+            Hide();
+            MainMenu menu = Object.FindObjectOfType<MainMenu>();
+
+            if (menu)
+            {
+                menu.ShowLobby();
             }
         }
 
@@ -178,16 +219,7 @@ namespace NullServers.UI
         {
             Cancel();
             _session.CommunityAccepted = false;
-            Show(new Notice(reason == GlobalBlacklist.BannedMessage ? "Access denied" : "Connection unavailable", reason, "OK", () =>
-            {
-                Hide();
-                MainMenu menu = Object.FindObjectOfType<MainMenu>();
-
-                if (menu)
-                {
-                    menu.ShowLobby();
-                }
-            }));
+            Show(new Notice(reason == GlobalBlacklist.BannedMessage ? "Access denied" : "Connection unavailable", reason, "OK", ReturnToMenu));
         }
 
         private void Show(Notice notice)
@@ -268,9 +300,15 @@ namespace NullServers.UI
 
             Text footer = _ui.Label(body, "NULLFRAME SERVERS", 20);
             footer.color = new Color(1f, 1f, 1f, 0.45f);
-            GameUi.Area(footer.rectTransform, 0f, 0f, 0.60f, 0.10f);
+            GameUi.Area(footer.rectTransform, 0f, 0f, _notice.Back != null ? 0.36f : 0.60f, 0.10f);
             Button button = _ui.Button(body, _notice.Button, _notice.Accepted);
             GameUi.Area(button.GetComponent<RectTransform>(), 0.70f, 0f, 1f, 0.11f);
+
+            if (_notice.Back != null)
+            {
+                Button back = _ui.Button(body, _notice.Back, _notice.Closed);
+                GameUi.Area(back.GetComponent<RectTransform>(), 0.38f, 0f, 0.68f, 0.11f);
+            }
             Layout();
             _scroll.verticalNormalizedPosition = 1f;
 
