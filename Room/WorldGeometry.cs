@@ -36,6 +36,7 @@ namespace NullServers.Room
 
         private readonly Dictionary<int, List<GameObject>> _sceneRoots = new();
         private readonly Dictionary<IntPtr, int> _rootIndexes = new();
+        private readonly Dictionary<IntPtr, int> _nameIndexes = new();
         private readonly Dictionary<int, int> _rootCounts = new();
         private readonly Dictionary<int, Transform> _roots = new();
         private readonly Dictionary<IntPtr, Transform> _parents = new();
@@ -98,28 +99,54 @@ namespace NullServers.Room
             return copy;
         }
 
+        // A part is found by its name path, so the host and every client get the same key. Positions in the hierarchy
+        // are not used: network objects (players, NPCs, the room) join the scene at different times on each machine.
+        // Siblings with the same name are told apart by their order among themselves.
+        // The key is "<scene>/<hash>/<hash>": numbers only, as MapPart.Valid expects.
         private string Key(Transform node)
         {
-            List<int> path = new();
             Scene scene = node.gameObject.scene;
+            List<string> names = new();
 
-            while (node.parent)
+            for (Transform current = node; current; current = current.parent)
             {
-                path.Add(node.GetSiblingIndex());
-                node = node.parent;
+                names.Add(current.name + "#" + NameIndex(current, scene));
             }
 
-            path.Add(_rootIndexes[node.gameObject.Pointer]);
-            uint hash = 2166136261;
+            names.Reverse();
+            string path = string.Join("/", names);
+            return Hash(scene.path.Length > 0 ? scene.path : scene.name, 2166136261) + "/" + Hash(path, 2166136261) + "/" + Hash(path, 0x9747B28C);
+        }
 
-            foreach (char value in scene.path.Length > 0 ? scene.path : scene.name)
+        // How many earlier siblings (or scene roots) share this object's name. Filled once per parent and scan.
+        private int NameIndex(Transform node, Scene scene)
+        {
+            if (_nameIndexes.TryGetValue(node.Pointer, out int index)) return index;
+
+            Transform[] siblings = node.parent
+                ? Enumerable.Range(0, node.parent.childCount).Select(node.parent.GetChild).ToArray()
+                : scene.GetRootGameObjects().Select(root => root.transform).ToArray();
+            Dictionary<string, int> counts = new(StringComparer.Ordinal);
+
+            foreach (Transform sibling in siblings)
+            {
+                counts.TryGetValue(sibling.name, out int count);
+                counts[sibling.name] = count + 1;
+                _nameIndexes[sibling.Pointer] = count;
+            }
+
+            return _nameIndexes.GetValueOrDefault(node.Pointer);
+        }
+
+        private static int Hash(string text, uint seed)
+        {
+            uint hash = seed;
+            foreach (char value in text)
             {
                 hash = unchecked((hash ^ value) * 16777619);
             }
 
-            path.Add((int)(hash & int.MaxValue));
-            path.Reverse();
-            return string.Join("/", path);
+            return (int)(hash & int.MaxValue);
         }
 
         private static bool Allowed(Transform node)
@@ -182,6 +209,8 @@ namespace NullServers.Room
         {
             List<GameObject> scanned = ScanRoots(scene, full);
             if (scanned.Count == 0) return;
+
+            _nameIndexes.Clear();
 
             Transform[] nodes = FindGeometry(scanned);
             HashSet<IntPtr> pointers = nodes.Select(node => node.Pointer).ToHashSet();
@@ -323,6 +352,7 @@ namespace NullServers.Room
             _rootCounts.Clear();
             _sceneRoots.Clear();
             _rootIndexes.Clear();
+            _nameIndexes.Clear();
             _scanAt = 0f;
             _applied = null;
             _scene = scene.handle;
