@@ -609,6 +609,11 @@ namespace NullServers.Network
             roomData = properties.ToJsonString(JsonOptions);
             if (Encoding.UTF8.GetByteCount(roomData) > 1024) return "Room settings exceed the relay limit, including the required content signature.";
 
+            if (IsNullFrame && relay.CurrentRoom == null)
+            {
+                _logger.Msg("Creating NullFrame room. Requested slots: " + maxPlayers + "; Mode: " + RoomData.Text(properties, "GameMode"));
+            }
+
             return null;
         }
 
@@ -749,7 +754,11 @@ namespace NullServers.Network
             }
         }
 
-        internal static void AfterJoinRoomFailed(RelayRoomResult result) => _instance.RestoreContent();
+        internal static void AfterJoinRoomFailed(RelayRoomResult result)
+        {
+            _instance._logger.Warning("Relay rejected room join: " + result + ".");
+            _instance.RestoreContent();
+        }
 
         internal static bool BeforeRoomJoined(RelayTransport __instance, RelayRoomInfo info)
         {
@@ -784,7 +793,7 @@ namespace NullServers.Network
 
             string color = RoomOptions.ReadNameColor(info.RoomData);
             _instance._roomNameColors[info.Id] = color;
-            _instance._logger.Debug($"NullFrame Servers room created. Id: {info.Id}; Players: {info.PlayerCount}/{info.MaxPlayers}; NameColor: {color ?? "none"}.");
+            _instance._logger.Msg($"NullFrame Servers room created. Id: {info.Id}; Players: {info.PlayerCount}/{info.MaxPlayers}; NameColor: {color ?? "none"}.");
         }
 
         internal static void AfterRoomUpdated(RelayRoomInfo info)

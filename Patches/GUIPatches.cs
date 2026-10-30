@@ -80,6 +80,12 @@ namespace NullServers.Patches
         public static void Finalizer(bool __state) => RoomCustomization.AfterSettingsControl(__state);
     }
 
+    [HarmonyPatch(typeof(GUI), nameof(GUI.Button), new[] { typeof(Rect), typeof(string) })]
+    internal static class GUIButtonForRoomJoinPatch
+    {
+        public static void Postfix(string __1, ref bool __result) => RoomCustomization.AfterJoinButton(__1, ref __result);
+    }
+
     [HarmonyPatch]
     internal static class GUIControlsForRoomCustomizationPatch
     {

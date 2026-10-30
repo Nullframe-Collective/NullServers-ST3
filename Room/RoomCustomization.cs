@@ -14,6 +14,7 @@ namespace NullServers.Room
         private readonly ColorPicker _picker;
         private LobbyMenu _listMenu;
         private RelayRoomInfo _drawingRoom;
+        private RelayRoomInfo _joinRoom;
         private bool _drawingMode;
         private int _nextRoom;
         private string _playerInput = "12";
@@ -348,6 +349,7 @@ namespace NullServers.Room
             _instance._listMenu = _instance._session.IsNullFrame && !__instance.BAJDIMCNBDM ? __instance : null;
             _instance._nextRoom = 0;
             _instance._drawingRoom = null;
+            _instance._joinRoom = null;
             _instance._drawingMode = false;
         }
 
@@ -355,7 +357,16 @@ namespace NullServers.Room
         {
             _instance._listMenu = null;
             _instance._drawingRoom = null;
+            _instance._joinRoom = null;
             _instance._drawingMode = false;
+        }
+
+        internal static void AfterJoinButton(string text, ref bool pressed)
+        {
+            RoomCustomization instance = _instance;
+            if (!instance._listMenu || !instance._session.IsNullFrame) return;
+
+            RoomJoin.Handle(instance._listMenu, instance._joinRoom, text, ref pressed);
         }
 
         internal static void BeforeLabel(ref Rect __0, ref string __1, out bool __state)
@@ -373,6 +384,8 @@ namespace NullServers.Room
 
             if (__0.x == 0f && __1.StartsWith("<size=", StringComparison.Ordinal))
             {
+                instance._joinRoom = null;
+
                 while (instance._nextRoom < rooms.Count && rooms[instance._nextRoom] == null)
                 {
                     instance._nextRoom++;
@@ -394,6 +407,7 @@ namespace NullServers.Room
 
                 instance._nextRoom++;
                 instance._drawingRoom = room;
+                instance._joinRoom = room;
                 instance._drawingMode = true;
                 __1 = formatted;
 

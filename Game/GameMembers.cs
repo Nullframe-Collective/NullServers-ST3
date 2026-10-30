@@ -234,10 +234,14 @@ namespace NullServers
         {
             internal GUISkin Skin => lobby.BIPMFIBNFBC;
             internal string RoomName => lobby.JEGIAEANOII;
+            internal string JoinCaption => lobby.DJFJJHFFANK;
+
             internal bool IsModeListOpen => lobby.EGDMPMDBJIK;
             internal bool IsCreatingRoom => lobby.EJLDOIOJGPC;
             internal Il2CppSystem.Collections.Generic.List<RelayRoomInfo> Rooms => lobby.NIBAENPHGKO;
             internal Il2CppSystem.Collections.Generic.List<LobbyMenu.AllModes> Modes => lobby.MHDLCNKEEGN;
+
+            internal void JoinRoom(string roomId) => lobby.PJPPMGMCANL(roomId);
 
             internal IEnumerable<LobbyMenu.AllMaps> MapEntries
             {
