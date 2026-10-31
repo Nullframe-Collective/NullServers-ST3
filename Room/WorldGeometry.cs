@@ -1,5 +1,3 @@
-﻿using Il2Cpp;
-using Il2CppFishNet.Object;
 using NullServers.Sandbox;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -149,39 +147,18 @@ namespace NullServers.Room
             return (int)(hash & int.MaxValue);
         }
 
-        private static bool Allowed(Transform node)
-        {
-            if (node.GetComponentInParent<NetworkObject>() || node.GetComponentInParent<Canvas>() || node.GetComponentInParent<Camera>() ||
-                node.GetComponentInParent<FPScontroller>() || node.GetComponentInParent<RagdollController>() ||
-                node.GetComponentsInChildren<NetworkObject>(true).Length > 0 || node.GetComponentsInChildren<Camera>(true).Length > 0 ||
-                node.GetComponentsInChildren<Canvas>(true).Length > 0)
-            {
-                return false;
-            }
-
-            for (Transform parent = node; parent; parent = parent.parent)
-            {
-                if (parent.name.StartsWith("NullFrame", StringComparison.Ordinal) || parent.name is "BuildGhost" or "BuildSelection")
-                {
-                    return false;
-                }
-            }
-
-            return !node.GetComponentInParent<Rigidbody>() && node.GetComponentsInChildren<Rigidbody>(true).Length == 0;
-        }
-
         private static Transform GeometryRoot(Transform node)
         {
             Collider collider = node.GetComponent<Collider>();
             Transform parent = node.parent;
 
-            if (!collider || collider.isTrigger || node.GetComponent<Renderer>() || !parent || !Allowed(parent))
+            if (!collider || collider.isTrigger || node.GetComponent<Renderer>() || !parent || !WorldGeometryFilter.Allowed(parent))
             {
                 return node;
             }
 
             Bounds physical = collider.bounds;
-            for (int depth = 0; depth < 3 && parent && Allowed(parent); depth++, parent = parent.parent)
+            for (int depth = 0; depth < 3 && parent && WorldGeometryFilter.Allowed(parent); depth++, parent = parent.parent)
             {
                 Renderer[] renderers = parent.GetComponentsInChildren<Renderer>(true).Where(renderer => renderer.enabled).ToArray();
                 if (renderers.Length > 8) break;
@@ -267,7 +244,7 @@ namespace NullServers.Room
             Transform[] all = roots.SelectMany(root => root.GetComponentsInChildren<Transform>(true)).ToArray();
             return all.Where(node => node.GetComponent<Renderer>() && !node.GetComponent<ParticleSystemRenderer>() || node.GetComponent<Terrain>() || node.GetComponent<Collider>() ||
                 node.name.Contains("spawn", StringComparison.OrdinalIgnoreCase) || node.gameObject.tag.Contains("spawn", StringComparison.OrdinalIgnoreCase))
-                .Where(Allowed).Select(GeometryRoot).GroupBy(node => node.Pointer).Select(group => group.First()).ToArray();
+                .Where(WorldGeometryFilter.Allowed).Select(GeometryRoot).GroupBy(node => node.Pointer).Select(group => group.First()).ToArray();
         }
 
         private static bool InsideOtherPart(Transform node, HashSet<IntPtr> pointers)

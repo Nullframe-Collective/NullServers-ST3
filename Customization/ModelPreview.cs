@@ -31,7 +31,7 @@ namespace NullServers.Customization
 
         internal ModelPreview(SyncCustomization source, LiveAppearance appearance)
         {
-            _root = new GameObject("ModelPreview")
+            _root = new GameObject("NullFrameModelPreview")
             {
                 hideFlags = HideFlags.HideAndDontSave
             };
@@ -249,7 +249,7 @@ namespace NullServers.Customization
                 };
                 Texture.Create();
 
-                _cameraObject = new GameObject("PreviewCamera")
+                _cameraObject = new GameObject("NullFramePreviewCamera")
                 {
                     hideFlags = HideFlags.HideAndDontSave
                 };
@@ -263,7 +263,7 @@ namespace NullServers.Customization
                 _camera.fieldOfView = 32f;
                 _camera.targetTexture = Texture;
 
-                _lightObject = new GameObject("PreviewLight")
+                _lightObject = new GameObject("NullFramePreviewLight")
                 {
                     hideFlags = HideFlags.HideAndDontSave
                 };
