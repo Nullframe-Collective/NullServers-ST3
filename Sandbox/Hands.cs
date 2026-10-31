@@ -44,6 +44,17 @@ namespace NullServers.Sandbox
         internal bool Rotating => Holding > 0 && Input.GetKey(KeyCode.R);
         internal IEnumerable<int> HeldObjects => _grips.Values.Where(grip => grip.State.Holding > 0).Select(grip => grip.State.Holding);
 
+        internal void CollectHeldProps(HashSet<int> target)
+        {
+            foreach (Grip grip in _grips.Values)
+            {
+                if (grip.State.Target == CarryTarget.Prop && grip.State.Holding > 0)
+                {
+                    target.Add(grip.State.Holding);
+                }
+            }
+        }
+
         internal Hands(SandboxWorld world)
         {
             _world = world;

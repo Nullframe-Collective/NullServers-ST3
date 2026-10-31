@@ -20,6 +20,7 @@ namespace NullServers.Sandbox
             internal readonly PhysicsBuffer Motion = new();
             internal Vector3 BaseScale;
             internal PropEffects Effects;
+            internal PropNavigation Navigation;
             internal Texture AppliedTexture;
         }
 
@@ -45,6 +46,7 @@ namespace NullServers.Sandbox
         private int _inputFrame = -1;
         private bool _selecting;
         private readonly HashSet<int> _selection = new();
+        private readonly HashSet<int> _heldProps = new();
         internal int SelectionCount => _selection.Count;
         internal IReadOnlyCollection<int> Selection => _selection;
         private GameObject _outline;
@@ -187,6 +189,8 @@ namespace NullServers.Sandbox
                 if (item == null) return;
             }
 
+            bool moved = created || item.State.Position != state.Position ||
+                item.State.Rotation != state.Rotation || item.State.Scale != state.Scale;
             item.Motion.Clear();
             item.State = state;
             item.Effects.Apply(state.Effects);
@@ -204,6 +208,7 @@ namespace NullServers.Sandbox
 
             item.AppliedTexture = null;
             ApplyPhysics(item, state);
+            UpdateNavigation(item, _world.IsHost, moved);
 
             if (created && state.Owner == _world.LocalId)
             {
@@ -300,6 +305,7 @@ namespace NullServers.Sandbox
             _pending.Remove(id);
             if (!_objects.Remove(id, out var item)) return;
 
+            item.Navigation?.Dispose();
             if (item.Root)
             {
                 Object.Destroy(item.Root);
@@ -891,19 +897,48 @@ namespace NullServers.Sandbox
 
         private void UpdatePlacedObjects()
         {
+            bool host = _world.IsHost;
+            _heldProps.Clear();
+
+            if (host)
+            {
+                _world.Hands.CollectHeldProps(_heldProps);
+            }
+
             foreach (Placed item in _objects.Values)
             {
                 if (!item.Root) continue;
 
+                UpdateNavigation(item, host, false);
+                item.Navigation?.SetHeld(_heldProps.Contains(item.State.Id));
                 ApplyTexture(item);
 
-                bool followsHost = !_world.IsHost && item.State.Dynamic && _world.Hands.Holding != item.State.Id;
+                bool followsHost = !host && item.State.Dynamic && _world.Hands.Holding != item.State.Id;
                 if (followsHost && item.Motion.Sample(_world.Physics.RenderTime, out var pose))
                 {
                     Vector3 position = new(pose.Position.X, pose.Position.Y, pose.Position.Z);
                     Quaternion rotation = new(pose.Rotation.X, pose.Rotation.Y, pose.Rotation.Z, pose.Rotation.W);
                     item.Root.transform.SetPositionAndRotation(position, rotation);
                 }
+            }
+        }
+
+        private static void UpdateNavigation(Placed item, bool host, bool moved)
+        {
+            if (!host)
+            {
+                item.Navigation?.Dispose();
+                item.Navigation = null;
+                return;
+            }
+
+            if (item.Navigation == null)
+            {
+                item.Navigation = new PropNavigation(item.Root);
+            }
+            else if (moved)
+            {
+                item.Navigation.Refresh();
             }
         }
 
